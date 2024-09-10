@@ -32,7 +32,7 @@ def setup(self):
     self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Define the input size based on the number of features
-    input_size = 17  # Update this to match the number of features in state_to_features
+    input_size = 21  # Updated to match the new number of features in state_to_features
 
     # Initialize main and target networks
     self.q_network = DQN(input_size, len(ACTIONS)).to(self.device)
@@ -72,6 +72,25 @@ def setup(self):
     self.scores = []
     self.average_scores = []
 
+    # Initialize losses tracking
+    self.losses = []  # Track loss values
+
+def end_of_round(self, last_game_state: dict, last_action: str, events: list[str]):
+    """
+    Called at the end of each game or when the agent died to hand out final rewards.
+    """
+    # (existing end-of-round logic)
+
+    # Performance graph update
+    if self.game_counter % 100 == 0:
+        self.create_performance_graph()
+
+    # Loss graph update
+    if len(self.losses) > 0 and self.game_counter % 100 == 0:
+        self.create_loss_graph()
+
+
+
 def act(self, game_state: dict) -> str:
     """
     Your agent should parse the input, think, and take a decision.
@@ -83,6 +102,7 @@ def act(self, game_state: dict) -> str:
     # Convert the game state into a feature vector
     features = state_to_features(game_state)
     if features is None:
+        self.logger.warning("Features are None, choosing random action")
         return np.random.choice(ACTIONS)
 
     # Convert features to tensor and pass through the DQN model
@@ -90,23 +110,33 @@ def act(self, game_state: dict) -> str:
     
     # Training mode: use epsilon-greedy for exploration
     if self.train:
+        self.logger.debug(f"Training mode, current epsilon: {self.epsilon:.4f}")
         if random.random() < self.epsilon:
             action = np.random.choice(ACTIONS)
+            self.logger.info(f"Chose random action due to epsilon: {action}")
         else:
             with torch.no_grad():
                 q_values = self.q_network(features)
                 action = ACTIONS[torch.argmax(q_values).item()]
+            self.logger.info(f"Chose action based on Q-values: {action}")
+            self.logger.debug(f"Q-values: {q_values.squeeze().tolist()}")
         
         # Decay epsilon
+        old_epsilon = self.epsilon
         self.epsilon = max(0.05, self.epsilon * 0.995)
+        self.logger.debug(f"Epsilon decayed from {old_epsilon:.4f} to {self.epsilon:.4f}")
         
         return action
 
     # Evaluation mode: always choose the best action
     else:
+        self.logger.debug("Evaluation mode, choosing best action")
         with torch.no_grad():
             q_values = self.q_network(features)
-            return ACTIONS[torch.argmax(q_values).item()]
+            action = ACTIONS[torch.argmax(q_values).item()]
+        self.logger.info(f"Chose action in evaluation mode: {action}")
+        self.logger.debug(f"Q-values: {q_values.squeeze().tolist()}")
+        return action
 
 def state_to_features(game_state: dict) -> np.ndarray:
     """
@@ -177,6 +207,26 @@ def state_to_features(game_state: dict) -> np.ndarray:
     # Feature 17: Current step number (normalized) (1 feature)
     features.append(game_state['step'] / 400)  # Assuming max steps is 400
 
+    # New features 18-21: Path blocked in each direction (4 features)
+    others = [agent[3] for agent in game_state['others']]
+    bomb_xys = [bomb[0] for bomb in bombs]
+    
+    directions = [(x, y), (x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
+    valid_tiles = []
+    for d in directions:
+        if ((arena[d] == 0) and
+            (explosion_map[d] < 1) and
+            (d not in others) and
+            (d not in bomb_xys)):
+            valid_tiles.append(d)
+    
+    features.extend([
+        int((x - 1, y) not in valid_tiles),  # LEFT
+        int((x + 1, y) not in valid_tiles),  # RIGHT
+        int((x, y - 1) not in valid_tiles),  # UP
+        int((x, y + 1) not in valid_tiles)   # DOWN
+    ])
+
     return np.array(features, dtype=np.float32)
 
 def calculate_danger(arena, bombs, explosion_map, x, y):
@@ -226,6 +276,9 @@ def manhattan_distance(pos1, pos2):
     Calculate the Manhattan distance between two positions.
     """
     return abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1])
+
+
+
 
 def create_performance_graph(self):
     """
@@ -285,4 +338,44 @@ def create_performance_graph(self):
 
     plt.tight_layout()
     plt.savefig(f'performance_graph_{self.game_counter}.png', dpi=300, bbox_inches='tight')
+    plt.close()
+
+def create_loss_graph(self):
+    """
+    Creates and saves an improved graph of the loss over time.
+    """
+    plt.figure(figsize=(16, 9))
+    
+    bg_color = '#f0f0f0'
+    text_color = '#333333'
+    loss_color = '#ff0000'
+    ma_color = '#0000ff'
+    grid_color = '#cccccc'
+
+    plt.gca().set_facecolor(bg_color)
+    plt.gcf().patch.set_facecolor(bg_color)
+
+    # Plot raw loss data
+    plt.plot(range(1, len(self.losses) + 1), self.losses, label='Raw Loss', color=loss_color, alpha=0.3, linewidth=1)
+
+    # Calculate and plot moving average
+    window_size = min(100, len(self.losses) // 10)  # Adjust window size based on data length
+    if window_size > 1:
+        ma = np.convolve(self.losses, np.ones(window_size), 'valid') / window_size
+        plt.plot(range(window_size, len(self.losses) + 1), ma, label=f'{window_size}-step Moving Average', color=ma_color, linewidth=2)
+
+    plt.title(f'Loss Over Time (Games {self.game_counter-99} to {self.game_counter})', fontsize=20, fontweight='bold', color=text_color, pad=20)
+    plt.xlabel('Training Steps', fontsize=14, color=text_color, labelpad=10)
+    plt.ylabel('Loss (log scale)', fontsize=14, color=text_color, labelpad=10)
+    
+    plt.legend(fontsize=12, loc='upper right', frameon=True, facecolor=bg_color, edgecolor='none')
+
+    plt.grid(True, linestyle='--', alpha=0.7, color=grid_color, linewidth=0.8)
+
+    plt.yscale('log')  # Set y-axis to logarithmic scale
+
+    plt.tick_params(colors=text_color, which='both', width=1, labelsize=10)
+
+    plt.tight_layout()
+    plt.savefig(f'loss_graph_{self.game_counter}.png', dpi=300, bbox_inches='tight')
     plt.close()
