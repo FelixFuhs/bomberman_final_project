@@ -3,48 +3,51 @@ import random
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.optim as optim
 from collections import deque
+import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
 
-# Add this as a global variable at the top of your file
-position_history = deque(maxlen=2000)  # Adjust maxlen as needed
+# Global variables
 ACTIONS = ['UP', 'RIGHT', 'DOWN', 'LEFT', 'WAIT', 'BOMB']
-
-# Q-learning parameters
-BATCH_SIZE = 64
-DISCOUNT_FACTOR = 0.95
-TARGET_UPDATE_FREQUENCY = 100  # Update target network every 100 steps
-MAX_GRAD_NORM = 1.0  # For gradient clipping
+position_history = deque(maxlen=2000)  # Adjust maxlen as needed
 
 # Neural Network for DQN
 class DQN(nn.Module):
-    def __init__(self):
+    def __init__(self, input_size, output_size):
         super(DQN, self).__init__()
-        self.fc1 = nn.Linear(10, 128)  # 10 features as input
+        self.fc1 = nn.Linear(input_size, 128)
         self.fc2 = nn.Linear(128, 64)
-        self.fc3 = nn.Linear(64, len(ACTIONS))  # 6 possible actions
+        self.fc3 = nn.Linear(64, output_size)
 
     def forward(self, x):
         x = torch.relu(self.fc1(x))
         x = torch.relu(self.fc2(x))
-        return self.fc3(x)  # Q-values for all actions
+        return self.fc3(x)
 
 def setup(self):
     """
-    Setup your model. This is called once when loading the agent.
-    If there is a pre-trained model, it loads it, otherwise it initializes a new one.
+    Setup your code. This is called once when loading each agent.
+    Make sure that you prepare everything such that act(...) can be called.
     """
     self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Initialize main and target networks
-    self.q_network = DQN().to(self.device)
-    self.target_network = DQN().to(self.device)
+    # Define the input size based on the number of features
+    input_size = 17  # Update this to match the number of features in state_to_features
 
-    # Load existing model if available, otherwise initialize
+    # Initialize main and target networks
+    self.q_network = DQN(input_size, len(ACTIONS)).to(self.device)
+    self.target_network = DQN(input_size, len(ACTIONS)).to(self.device)
+
+    # Load existing model if available and compatible, otherwise initialize new model
     if os.path.exists("dqn_model.pt"):
-        self.q_network.load_state_dict(torch.load("dqn_model.pt", map_location=self.device, weights_only=True))
-        self.target_network.load_state_dict(self.q_network.state_dict())
-        print("DQN model loaded successfully.")
+        try:
+            state_dict = torch.load("dqn_model.pt", map_location=self.device, weights_only=True)
+            self.q_network.load_state_dict(state_dict)
+            self.target_network.load_state_dict(state_dict)
+            print("DQN model loaded successfully.")
+        except RuntimeError as e:
+            print(f"Error loading model: {e}")
+            print("Initializing new model with current architecture.")
     else:
         print("No pre-trained model found, initializing new model.")
 
@@ -53,20 +56,33 @@ def setup(self):
     self.target_network.eval()
 
     # Optimizer
-    self.optimizer = optim.Adam(self.q_network.parameters(), lr=1e-4)
+    self.optimizer = torch.optim.Adam(self.q_network.parameters(), lr=1e-4)
 
     # Set step counter for target network updates
     self.steps = 0
 
+    # Initialize epsilon for epsilon-greedy strategy
+    self.epsilon = 1.0
+
+    # Additional agent state
+    self.steps_since_bomb = 0
+
+    # Performance tracking
+    self.game_counter = 0
+    self.scores = []
+    self.average_scores = []
+
 def act(self, game_state: dict) -> str:
     """
-    The agent selects an action based on the game state using epsilon-greedy policy during training,
-    and always chooses the best action (based on the DQN model) during evaluation.
+    Your agent should parse the input, think, and take a decision.
+    When not in training mode, the maximum execution time for this method is 0.5s.
+
+    :param game_state: A dictionary describing the current game board.
+    :return: A string representing an action
     """
     # Convert the game state into a feature vector
     features = state_to_features(game_state)
     if features is None:
-        # If the features are None (e.g., game not started or invalid state), return a random action
         return np.random.choice(ACTIONS)
 
     # Convert features to tensor and pass through the DQN model
@@ -75,17 +91,18 @@ def act(self, game_state: dict) -> str:
     # Training mode: use epsilon-greedy for exploration
     if self.train:
         if random.random() < self.epsilon:
-            # With probability epsilon, choose a random action (explore)
             action = np.random.choice(ACTIONS)
         else:
-            # Otherwise, choose the best action from the DQN (exploit)
             with torch.no_grad():
                 q_values = self.q_network(features)
                 action = ACTIONS[torch.argmax(q_values).item()]
         
+        # Decay epsilon
+        self.epsilon = max(0.05, self.epsilon * 0.995)
+        
         return action
 
-    # Evaluation mode (not training): always choose the best action
+    # Evaluation mode: always choose the best action
     else:
         with torch.no_grad():
             q_values = self.q_network(features)
@@ -93,7 +110,7 @@ def act(self, game_state: dict) -> str:
 
 def state_to_features(game_state: dict) -> np.ndarray:
     """
-    Converts the game state into a feature vector.
+    Converts the game state to a feature vector.
     """
     global position_history
 
@@ -103,39 +120,49 @@ def state_to_features(game_state: dict) -> np.ndarray:
 
     # Extract relevant information from game state
     arena = game_state['field']
+    bombs = game_state['bombs']
+    explosion_map = game_state['explosion_map']
     coins = game_state['coins']
-    (name, score, bomb_possible, (x, y)) = game_state['self']
-
+    (x, y) = game_state['self'][3]
+    
     # Initialize feature list
     features = []
 
-    # Feature 1: Distance to nearest coin
+    # Feature 1-3: Distance and direction to nearest coin (3 features)
     if coins:
         distances = [manhattan_distance((x, y), coin) for coin in coins]
         nearest_coin_distance = min(distances)
         features.append(nearest_coin_distance)
-    else:
-        features.append(-1)  # No coins left
-
-    # Feature 2-3: Direction to nearest coin
-    if coins:
         nearest_coin = coins[distances.index(nearest_coin_distance)]
-        coin_direction = (nearest_coin[0] - x, nearest_coin[1] - y)
-        features.extend(coin_direction)
+        features.extend(normalize_direction(nearest_coin[0] - x, nearest_coin[1] - y))
     else:
-        features.extend((0, 0))
+        features.extend([-1, 0, 0])  # No coins left
 
-    # Feature 4: Number of coins left
-    features.append(len(coins))
-
-    # Feature 5-8: Can move in each direction
+    # Feature 4-7: Danger levels in each direction (4 features)
     for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:  # up, right, down, left
-        features.append(int(arena[x+dx, y+dy] == 0))
+        features.append(calculate_danger(arena, bombs, explosion_map, x+dx, y+dy))
 
-    # Update position history
+    # Feature 8: Number of surrounding crates (1 feature)
+    features.append(count_surrounding_crates(arena, x, y))
+
+    # Feature 9: Bomb availability (1 feature)
+    features.append(int(game_state['self'][2]))
+
+    # Feature 10: Steps since last bomb placement (1 feature)
+    features.append(game_state.get('steps_since_bomb', 0))
+
+    # Feature 11-13: Nearest opponent distance and direction (3 features)
+    opponent_info = get_nearest_opponent_info(game_state)
+    features.extend(opponent_info)
+
+    # Feature 14: Exploration ratio (1 feature)
     position_history.append((x, y))
+    unique_positions = len(set(position_history))
+    total_steps = len(position_history)
+    exploration_ratio = unique_positions / total_steps if total_steps > 0 else 0
+    features.append(exploration_ratio)
 
-    # Feature 9: Steps in current position
+    # Feature 15: Steps in current position (1 feature)
     steps_in_place = 1
     for past_pos in reversed(list(position_history)[:-1]):
         if past_pos == (x, y):
@@ -144,13 +171,118 @@ def state_to_features(game_state: dict) -> np.ndarray:
             break
     features.append(steps_in_place)
 
-    # Feature 10: Exploration ratio
-    unique_positions = len(set(position_history))
-    total_steps = len(position_history)
-    exploration_ratio = unique_positions / total_steps if total_steps > 0 else 0
-    features.append(exploration_ratio)
+    # Feature 16: Number of coins left (1 feature)
+    features.append(len(coins))
+
+    # Feature 17: Current step number (normalized) (1 feature)
+    features.append(game_state['step'] / 400)  # Assuming max steps is 400
 
     return np.array(features, dtype=np.float32)
 
+def calculate_danger(arena, bombs, explosion_map, x, y):
+    """
+    Calculate the danger level at a given position.
+    """
+    if arena[x, y] == -1:  # Wall
+        return 1
+    danger = 0
+    if explosion_map[x, y] > 0:
+        danger = 1
+    for (bx, by), t in bombs:
+        if manhattan_distance((x, y), (bx, by)) <= 3:
+            danger = max(danger, 1 - (t / 4))  # Normalize danger by bomb timer
+    return danger
+
+def count_surrounding_crates(arena, x, y):
+    """
+    Count the number of crates surrounding a given position.
+    """
+    return sum(arena[x+dx, y+dy] == 1 
+               for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)])
+
+def get_nearest_opponent_info(game_state):
+    """
+    Get information about the nearest opponent.
+    """
+    others = game_state['others']
+    if not others:
+        return [-1, 0, 0]  # No opponents
+    (x, y) = game_state['self'][3]
+    distances = [manhattan_distance((x, y), other[3]) for other in others]
+    nearest_distance = min(distances)
+    nearest_opponent = others[distances.index(nearest_distance)]
+    direction = normalize_direction(nearest_opponent[3][0] - x, nearest_opponent[3][1] - y)
+    return [nearest_distance] + direction
+
+def normalize_direction(dx, dy):
+    """
+    Normalize a direction vector.
+    """
+    length = np.sqrt(dx**2 + dy**2)
+    return [dx / length, dy / length] if length > 0 else [0, 0]
+
 def manhattan_distance(pos1, pos2):
-    return abs(int(pos1[0]) - int(pos2[0])) + abs(int(pos1[1]) - int(pos2[1]))
+    """
+    Calculate the Manhattan distance between two positions.
+    """
+    return abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1])
+
+def create_performance_graph(self):
+    """
+    Creates and saves a graph of the average scores over time.
+    """
+    plt.figure(figsize=(16, 9))
+    
+    bg_color = '#f0f0f0'
+    text_color = '#333333'
+    score_color = '#808080'
+    ma_100_color = '#ff0000'
+    ma_250_color = '#ffa500'
+    max_score_color = '#0000ff'
+    grid_color = '#cccccc'
+
+    plt.gca().set_facecolor(bg_color)
+    plt.gcf().patch.set_facecolor(bg_color)
+
+    plt.plot(range(1, self.game_counter + 1), self.scores, label='Individual Scores', alpha=0.5, color=score_color, linewidth=1)
+
+    if self.game_counter >= 100:
+        ma_100 = np.convolve(self.scores, np.ones(100), 'valid') / 100
+        plt.plot(range(100, self.game_counter + 1), ma_100, label='100-game MA', color=ma_100_color, linewidth=3)
+
+    if self.game_counter >= 250:
+        ma_250 = np.convolve(self.scores, np.ones(250), 'valid') / 250
+        plt.plot(range(250, self.game_counter + 1), ma_250, label='250-game MA', color=ma_250_color, linewidth=3)
+
+    max_score = max(self.scores)
+    max_index = self.scores.index(max_score)
+    plt.scatter(max_index + 1, max_score, color=max_score_color, s=150, zorder=5, label=f'Max Score: {max_score}', edgecolors='black')
+
+    plt.title(f'Agent Performance over {self.game_counter:,} Games', fontsize=20, fontweight='bold', color=text_color, pad=20)
+    plt.xlabel('Game Number', fontsize=14, color=text_color, labelpad=10)
+    plt.ylabel('Score', fontsize=14, color=text_color, labelpad=10)
+    
+    plt.legend(fontsize=12, loc='upper left', bbox_to_anchor=(0.02, 0.98), frameon=True, facecolor=bg_color, edgecolor='none')
+
+    plt.gca().xaxis.set_major_formatter(FuncFormatter(lambda x, p: format(int(x), ',')))
+
+    plt.grid(True, linestyle='--', alpha=0.7, color=grid_color, linewidth=0.8)
+
+    for spine in plt.gca().spines.values():
+        spine.set_visible(False)
+
+    plt.annotate(f'Latest Score: {self.scores[-1]}', xy=(0.02, 0.06), xycoords='axes fraction', fontsize=12, color=text_color, fontweight='bold')
+    
+    if self.game_counter >= 100:
+        plt.annotate(f'Latest 100-game MA: {ma_100[-1]:.2f}', xy=(0.02, 0.03), xycoords='axes fraction', fontsize=12, color=text_color, fontweight='bold')
+    
+    if self.game_counter >= 250:
+        plt.annotate(f'Latest 250-game MA: {ma_250[-1]:.2f}', xy=(0.02, 0.00), xycoords='axes fraction', fontsize=12, color=text_color, fontweight='bold')
+
+    plt.tick_params(colors=text_color, which='both', width=1, labelsize=10)
+
+    plt.ylim(bottom=0)
+
+    plt.tight_layout()
+    plt.savefig(f'performance_graph_{self.game_counter}.png', dpi=300, bbox_inches='tight')
+    plt.close()
