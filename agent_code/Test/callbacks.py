@@ -52,8 +52,10 @@ def act(self, game_state: dict) -> str:
             # Exploit: choose the best action according to Q-table
             self.logger.debug("Querying model for action.")
             if state in self.q_table:
+                self.logger.debug("State found in qtable.")
                 return max(self.q_table[state], key=self.q_table[state].get)
             else:
+                self.logger.debug("State not found doing something at random.")
                 return np.random.choice(ACTIONS)
     else:
         self.logger.debug("Game state is None, choosing random action.")
