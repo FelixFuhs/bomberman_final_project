@@ -134,17 +134,17 @@ def optimize_model(self):
 def reward_from_events(self, events: List[str]) -> int:
     """Translate game events into rewards."""
     game_rewards = {
-        e.COIN_COLLECTED: 2,
+        e.COIN_COLLECTED: 3,
         e.KILLED_OPPONENT: 5,
         e.INVALID_ACTION: -1,
-        e.WAITED: -0.1,
+        e.WAITED: -0.5,
         e.KILLED_SELF: -5,
         e.SURVIVED_ROUND: 0.05,
         e.CRATE_DESTROYED: 1,
-        e.MOVED_DOWN: -0.1,
-        e.MOVED_LEFT: -0.1,
-        e.MOVED_RIGHT: -0.1,
-        e.MOVED_UP: -0.1,
+        e.MOVED_DOWN: -0.01,
+        e.MOVED_LEFT: -0.01,
+        e.MOVED_RIGHT: -0.01,
+        e.MOVED_UP: -0.01,
         e.KILLED_SELF: -6,
         e.BOMB_DROPPED: 1,
     }
