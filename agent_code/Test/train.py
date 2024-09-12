@@ -9,19 +9,11 @@ import torch.nn as nn
 import torch.optim as optim
 import events as e
 from .callbacks import state_to_features, ACTIONS, create_graphs
+from .config import (TRANSITION_HISTORY_SIZE, BATCH_SIZE, GAMMA, TARGET_UPDATE, 
+                     LEARNING_RATE, EPSILON_START, EPSILON_END, EPSILON_DECAY)
 
 # Transition tuple for storing experiences
 Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'))
-
-# Hyperparameters
-TRANSITION_HISTORY_SIZE = 100_000  # Max transitions stored in replay buffer
-BATCH_SIZE = 64
-GAMMA = 0.99
-TARGET_UPDATE = 10
-LEARNING_RATE = 0.0005
-EPSILON_START = 1.0
-EPSILON_END = 0.05
-EPSILON_DECAY = 5000
 
 def setup_training(self):
     """Initialize training settings."""

@@ -7,13 +7,11 @@ import logging
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 from collections import deque
+from .config import LEARNING_RATE, ACTIONS  # Importing necessary hyperparameters from config
 
 # Set up logging
 logging.basicConfig(filename='agent.log', level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Global variables
-ACTIONS = ['UP', 'RIGHT', 'DOWN', 'LEFT', 'WAIT', 'BOMB']
 
 # Neural Network for DQN
 class DQN(nn.Module):
@@ -46,7 +44,7 @@ def setup(self):
 
     if os.path.exists("dqn_model.pt"):
         try:
-            state_dict = torch.load("dqn_model.pt", map_location=self.device, weights_only=True)
+            state_dict = torch.load("dqn_model.pt", map_location=self.device)
             self.q_network.load_state_dict(state_dict)
             self.target_network.load_state_dict(state_dict)
             logger.info("DQN model loaded successfully.")
@@ -57,13 +55,15 @@ def setup(self):
 
     self.q_network.eval()
     self.target_network.eval()
-    self.optimizer = torch.optim.Adam(self.q_network.parameters(), lr=1e-5)
+
+    # Using LEARNING_RATE from config.py
+    self.optimizer = torch.optim.Adam(self.q_network.parameters(), lr=LEARNING_RATE)
     self.steps = 0
     self.epsilon = 1.0
     self.scores = []
     self.losses = []
     self.game_counter = 0
-    self.total_training_steps = 0  # New: Track total training steps
+    self.total_training_steps = 0  # Track total training steps
 
 def act(self, game_state: dict) -> str:
     """Choose an action based on Q-values or random exploration."""
@@ -113,7 +113,7 @@ def create_performance_graph(self):
     plt.figure(figsize=(16, 9))
     plt.plot(range(1, len(self.scores) + 1), self.scores, label='Scores', color='#808080')
     
-    if len(self.scores) >= 100:
+    if (len(self.scores) >= 100):
         avg_scores = np.convolve(self.scores, np.ones(100) / 100, 'valid')
         plt.plot(range(100, len(self.scores) + 1), avg_scores, label='100-game MA', color='red')
 
@@ -124,7 +124,6 @@ def create_performance_graph(self):
     plt.grid(True)
     plt.savefig(f'performance_graph_{self.game_counter}.png')
     plt.close()
-
 
 def create_loss_graph(self):
     """Create and save loss graph with logarithmic scale."""
@@ -153,4 +152,3 @@ def create_loss_graph(self):
         plt.tight_layout()
         plt.savefig(f'loss_graph_{self.total_training_steps}.png')
         plt.close()
-
