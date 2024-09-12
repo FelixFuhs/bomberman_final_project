@@ -29,7 +29,7 @@ def setup_training(self):
     self.epsilon = EPSILON_START
     self.optimizer = optim.Adam(self.q_network.parameters(), lr=LEARNING_RATE)
     self.criterion = nn.MSELoss()
-    self.steps = 0
+    self.total_training_steps = 0
     self.losses = []
     self.scores = []
     self.game_counter = 0
@@ -57,14 +57,14 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
             self.logger.debug(f"Optimization done. Loss: {loss}")
 
     # Update target network every few steps
-    if self.steps % TARGET_UPDATE == 0:
+    if self.total_training_steps % TARGET_UPDATE == 0:
         self.target_network.load_state_dict(self.q_network.state_dict())
-        self.logger.info(f"Target network updated at step {self.steps}")
+        self.logger.info(f"Target network updated at step {self.total_training_steps}")
 
     # Update epsilon for exploration-exploitation balance
-    self.epsilon = max(EPSILON_END, EPSILON_START * np.exp(-1. * self.steps / EPSILON_DECAY))
+    self.epsilon = max(EPSILON_END, EPSILON_START * np.exp(-1. * self.total_training_steps / EPSILON_DECAY))
     self.logger.debug(f"Epsilon decayed to {self.epsilon:.4f}")
-    self.steps += 1
+    self.total_training_steps += 1
 
 def end_of_round(self, last_game_state: dict, last_action: str, events: List[str]):
     """Handle end of round logic."""
@@ -87,18 +87,16 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
     torch.save(self.q_network.state_dict(), "dqn_model.pt")
     self.logger.info(f"Model saved after round {self.game_counter}")
 
-    # Track game performance and update graphs periodically
+    # Track game performance
     self.scores.append(last_game_state['self'][1])
 
-    # Only create graphs every 100 games (or adjust this to a reasonable interval)
+    # Create graphs every 100 games
     if self.game_counter % 100 == 0:
         avg_score = np.mean(self.scores[-100:])
         self.logger.info(f"Game {self.game_counter}: Epsilon {self.epsilon:.4f}, Avg. score (last 100 games): {avg_score:.2f}")
         create_graphs(self)
-        self.losses = []  # Reset losses after creating the graph
 
     self.game_counter += 1
-
 
 def optimize_model(self):
     """Perform a single optimization step."""
@@ -134,23 +132,22 @@ def optimize_model(self):
     # Compute loss
     loss = self.criterion(state_action_values, expected_state_action_values.unsqueeze(1))
 
-    # Backpropagate the loss
+    # Optimize the model
     self.optimizer.zero_grad()
     loss.backward()
     self.optimizer.step()
 
     return loss.item()
 
-
 def reward_from_events(self, events: List[str]) -> int:
     """Translate game events into rewards."""
     game_rewards = {
-        e.COIN_COLLECTED: 10,
-        e.KILLED_OPPONENT: 50,
-        e.INVALID_ACTION: -10,
-        e.WAITED: -5,
-        e.KILLED_SELF: -100,
-        e.SURVIVED_ROUND: 50,
-        e.CRATE_DESTROYED: 10,
+        e.COIN_COLLECTED: 1,
+        e.KILLED_OPPONENT: 5,
+        e.INVALID_ACTION: -1,
+        e.WAITED: -0.1,
+        e.KILLED_SELF: -5,
+        e.SURVIVED_ROUND: 0.5,
+        e.CRATE_DESTROYED: 0.5,
     }
     return sum(game_rewards.get(event, 0) for event in events)

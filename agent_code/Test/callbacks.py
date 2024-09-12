@@ -46,7 +46,7 @@ def setup(self):
 
     if os.path.exists("dqn_model.pt"):
         try:
-            state_dict = torch.load("dqn_model.pt", map_location=self.device, weights_only=True)  # Added weights_only=True
+            state_dict = torch.load("dqn_model.pt", map_location=self.device, weights_only=True)
             self.q_network.load_state_dict(state_dict)
             self.target_network.load_state_dict(state_dict)
             logger.info("DQN model loaded successfully.")
@@ -63,7 +63,7 @@ def setup(self):
     self.scores = []
     self.losses = []
     self.game_counter = 0
-
+    self.total_training_steps = 0  # New: Track total training steps
 
 def act(self, game_state: dict) -> str:
     """Choose an action based on Q-values or random exploration."""
@@ -83,7 +83,6 @@ def act(self, game_state: dict) -> str:
         action = ACTIONS[torch.argmax(q_values).item()]
     
     return action
-
 
 def state_to_features(game_state: dict) -> np.ndarray:
     """Convert the game state into the feature vector."""
@@ -107,7 +106,7 @@ def create_graphs(self):
     """Generate and save performance and loss graphs."""
     create_performance_graph(self)
     create_loss_graph(self)
-    logger.info(f"Graphs created for game {self.game_counter}")
+    logger.info(f"Graphs created for game {self.game_counter}, Total steps: {self.total_training_steps}")
 
 def create_performance_graph(self):
     """Create and save performance graph."""
@@ -123,23 +122,35 @@ def create_performance_graph(self):
     plt.title(f'Score over {len(self.scores)} Games')
     plt.legend()
     plt.grid(True)
-    plt.savefig(f'performance_graph_{len(self.scores)}.png')
+    plt.savefig(f'performance_graph_{self.game_counter}.png')
     plt.close()
 
+
 def create_loss_graph(self):
-    """Create and save loss graph."""
+    """Create and save loss graph with logarithmic scale."""
     if len(self.losses) > 0:
         plt.figure(figsize=(16, 9))
-        plt.plot(range(1, len(self.losses) + 1), self.losses, label='Losses', color='red')
 
-        if len(self.losses) > 10:
-            avg_loss = np.convolve(self.losses, np.ones(10) / 10, 'valid')
-            plt.plot(range(10, len(self.losses) + 1), avg_loss, label='10-step MA', color='blue')
+        # Convert losses to numpy array and replace zeros/negatives with a small positive value
+        losses = np.array(self.losses)
+        min_positive = np.min(losses[losses > 0]) if np.any(losses > 0) else 1e-10
+        losses[losses <= 0] = min_positive / 10  # Set to a value smaller than the smallest positive loss
+
+        plt.semilogy(range(1, len(losses) + 1), losses, label='Losses', color='red')
+
+        if len(losses) > 10:
+            # Use convolution for moving average, handling log scale
+            log_losses = np.log10(losses)
+            avg_log_loss = np.convolve(log_losses, np.ones(10) / 10, 'valid')
+            avg_loss = 10 ** avg_log_loss
+            plt.semilogy(range(10, len(losses) + 1), avg_loss, label='10-step MA', color='blue')
 
         plt.xlabel('Training Steps')
-        plt.ylabel('Loss')
-        plt.title('Loss over time')
+        plt.ylabel('Loss (log scale)')
+        plt.title('Loss over time (logarithmic scale)')
         plt.legend()
-        plt.grid(True)
-        plt.savefig(f'loss_graph_{len(self.losses)}.png')
+        plt.grid(True, which="both", ls="-", alpha=0.2)
+        plt.tight_layout()
+        plt.savefig(f'loss_graph_{self.total_training_steps}.png')
         plt.close()
+
