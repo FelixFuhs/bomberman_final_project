@@ -37,7 +37,7 @@ class DQN(nn.Module):
 
 def setup(self):
     self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    input_size = 3  # Adjusted to match the feature vector size
+    input_size = 12  # Adjusted to match the new feature vector size
 
     self.q_network = DQN(input_size, len(ACTIONS)).to(self.device)
     self.target_network = DQN(input_size, len(ACTIONS)).to(self.device)
@@ -84,22 +84,82 @@ def act(self, game_state: dict) -> str:
     
     return action
 
+def is_move_valid(x, y, game_state):
+    """Check if the move to (x, y) is valid based on obstacles and bombs."""
+    field = game_state['field']
+    if x < 0 or x >= field.shape[0] or y < 0 or y >= field.shape[1]:
+        return False
+    if field[x, y] != 0:  # Not a free tile
+        return False
+    bombs = game_state['bombs']
+    if any((bx, by) == (x, y) for (bx, by), _ in bombs):
+        return False
+    others = game_state['others']
+    if any((ox, oy) == (x, y) for _, _, _, (ox, oy) in others):
+        return False
+    return True
+
 def state_to_features(game_state: dict) -> np.ndarray:
-    """Convert the game state into the feature vector."""
+    """Convert the game state into a feature vector."""
     if game_state is None:
         return None
 
-    # Example of minimal feature extraction
+    arena = game_state['field']
+    (x, y) = game_state['self'][3]  # Agent's position
     coins = game_state['coins']
-    (x, y) = game_state['self'][3]
-    nearest_coin_dist = min([abs(x - cx) + abs(y - cy) for (cx, cy) in coins]) if coins else -1
+    bombs = game_state['bombs']
+    others = [xy for (_, _, _, xy) in game_state['others']]
     
-    # Concatenating other example features
+    # Feature 1-4: Valid moves (UP, DOWN, LEFT, RIGHT)
+    valid_up = is_move_valid(x, y - 1, game_state)
+    valid_down = is_move_valid(x, y + 1, game_state)
+    valid_left = is_move_valid(x - 1, y, game_state)
+    valid_right = is_move_valid(x + 1, y, game_state)
+
+    # Feature 5: Bomb availability
+    bomb_available = game_state['self'][2]  # 1 if the agent can place a bomb, 0 otherwise
+    
+    # Feature 6: Nearest coin distance
+    nearest_coin_dist = min([abs(x - cx) + abs(y - cy) for (cx, cy) in coins]) if coins else -1
+
+    # Feature 7: Proximity to nearest opponent
+    nearest_opponent_dist = min([abs(x - ox) + abs(y - oy) for (ox, oy) in others]) if others else -1
+
+    # Feature 8: Proximity to bombs (closest bomb and blast danger)
+    bomb_map = np.ones(arena.shape) * 5  # Distance to the nearest bomb
+    for (bx, by), t in bombs:
+        for (i, j) in [(bx + h, by) for h in range(-3, 4)] + [(bx, by + h) for h in range(-3, 4)]:
+            if 0 <= i < arena.shape[0] and 0 <= j < arena.shape[1]:
+                bomb_map[i, j] = min(bomb_map[i, j], t)
+    nearest_bomb_dist = bomb_map[x, y] if bombs else -1
+
+    # Feature 9: In a dead end (binary feature, 1 if in dead end)
+    dead_end = 1 if (
+        arena[x + 1, y] == -1
+        and arena[x - 1, y] == -1
+        and arena[x, y + 1] == -1
+        and arena[x, y - 1] == -1
+    ) else 0
+
+    # Feature 10: Number of adjacent crates
+    adjacent_crates = sum(
+        [arena[x + dx, y + dy] == 1 for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1)]]
+    )
+
+    # Feature 11: Normalized step count (current step / max steps)
+    normalized_step = game_state['step'] / 400
+
+    # Feature 12: Static bias feature (can help in learning)
+    bias_feature = 1  # A constant feature to help the network learn bias
+
+    # Combine all features into a single feature vector
     features = [
-        nearest_coin_dist, 
-        game_state['self'][2],  # Bomb availability
-        game_state['step'] / 400  # Normalized step number
+        valid_up, valid_down, valid_left, valid_right, 
+        bomb_available, nearest_coin_dist, nearest_opponent_dist, 
+        nearest_bomb_dist, dead_end, adjacent_crates, 
+        normalized_step, bias_feature
     ]
+    
     return np.array(features, dtype=np.float32)
 
 def create_graphs(self):

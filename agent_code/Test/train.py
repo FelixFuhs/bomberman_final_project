@@ -30,7 +30,7 @@ def setup_training(self):
 def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_state: dict, events: List[str]):
     """Process game events and store transitions."""
     self.logger.debug(f"Events: {events} at step {new_game_state['step']}")
-    
+
     # Convert game states to features
     old_features = state_to_features(old_game_state)
     new_features = state_to_features(new_game_state)
@@ -105,7 +105,7 @@ def optimize_model(self):
     # Convert the list of non-final next states to a numpy array before converting to a tensor
     non_final_next_states = np.array([s for s in batch.next_state if s is not None])
     non_final_next_states = torch.tensor(non_final_next_states, device=self.device, dtype=torch.float32)
-    
+
     state_batch = torch.tensor(np.array(batch.state), device=self.device, dtype=torch.float32)
     action_batch = torch.tensor([ACTIONS.index(a) for a in batch.action], device=self.device, dtype=torch.long).unsqueeze(1)
     reward_batch = torch.tensor(batch.reward, device=self.device, dtype=torch.float32)
