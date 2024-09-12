@@ -12,7 +12,7 @@ GAMMA = 0.99  # Discount factor
 TARGET_UPDATE = 500  # Number of steps between target network updates
 EPSILON_START = 1.0
 EPSILON_END = 0.05
-EPSILON_DECAY = 500  # Number of steps for epsilon decay
+EPSILON_DECAY = 50000  # Number of steps for epsilon decay
 
 # Experience replay parameters
 TRANSITION_HISTORY_SIZE = 100_000  # Size of the replay buffer
