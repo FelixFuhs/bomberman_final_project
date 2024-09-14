@@ -7,7 +7,7 @@ import logging
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 from collections import deque
-from .config import LEARNING_RATE, ACTIONS  # Importing necessary hyperparameters from config
+from .config import LEARNING_RATE, ACTIONS, TEMPERATURE_START  # Importing necessary hyperparameters from config
 
 # Set up logging
 logging.basicConfig(filename='agent.log', level=logging.INFO)
@@ -59,14 +59,14 @@ def setup(self):
     # Using LEARNING_RATE from config.py
     self.optimizer = torch.optim.Adam(self.q_network.parameters(), lr=LEARNING_RATE)
     self.steps = 0
-    self.epsilon = 1.0
+    self.temperature = TEMPERATURE_START  # Initialize temperature
     self.scores = []
     self.losses = []
     self.game_counter = 0
     self.total_training_steps = 0  # Track total training steps
 
 def act(self, game_state: dict) -> str:
-    """Choose an action based on Q-values or random exploration."""
+    """Choose an action based on Q-values and softmax action selection."""
     features = state_to_features(game_state)
     if features is None:
         return np.random.choice(ACTIONS)
@@ -74,14 +74,19 @@ def act(self, game_state: dict) -> str:
     features = torch.from_numpy(features).float().unsqueeze(0).to(self.device)
 
     with torch.no_grad():
-        q_values = self.q_network(features)
-        self.logger.debug(f"Q-values: {q_values.squeeze().tolist()}")  # Log Q-values
+        q_values = self.q_network(features).squeeze()
+        self.logger.debug(f"Q-values: {q_values.tolist()}")  # Log Q-values
 
-    if self.train and random.random() < self.epsilon:
-        action = np.random.choice(ACTIONS)
-    else:
-        action = ACTIONS[torch.argmax(q_values).item()]
-    
+    # Subtract max Q-value to prevent numerical instability
+    q_values_adjusted = q_values - q_values.max()
+
+    # Apply temperature scaling
+    softmax_probs = torch.softmax(q_values_adjusted / self.temperature, dim=0).cpu().numpy()
+
+    # Sample an action according to the softmax probabilities
+    action_index = np.random.choice(len(ACTIONS), p=softmax_probs)
+    action = ACTIONS[action_index]
+
     return action
 
 def is_move_valid(x, y, game_state):
@@ -118,7 +123,7 @@ def state_to_features(game_state: dict) -> np.ndarray:
 
     # Feature 5: Bomb availability
     bomb_available = game_state['self'][2]  # 1 if the agent can place a bomb, 0 otherwise
-    
+
     # Feature 6: Nearest coin distance
     nearest_coin_dist = min([abs(x - cx) + abs(y - cy) for (cx, cy) in coins]) if coins else -1
 

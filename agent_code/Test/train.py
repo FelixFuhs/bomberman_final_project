@@ -10,7 +10,7 @@ import torch.optim as optim
 import events as e
 from .callbacks import state_to_features, ACTIONS, create_graphs
 from .config import (TRANSITION_HISTORY_SIZE, BATCH_SIZE, GAMMA, TARGET_UPDATE, 
-                     LEARNING_RATE, EPSILON_START, EPSILON_END, EPSILON_DECAY)
+                     LEARNING_RATE, TEMPERATURE_START, TEMPERATURE_END, TEMPERATURE_DECAY)
 
 # Transition tuple for storing experiences
 Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'))
@@ -18,14 +18,14 @@ Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'
 def setup_training(self):
     """Initialize training settings."""
     self.transitions = deque(maxlen=TRANSITION_HISTORY_SIZE)
-    self.epsilon = EPSILON_START
+    self.temperature = TEMPERATURE_START  # Initialize temperature
     self.optimizer = optim.Adam(self.q_network.parameters(), lr=LEARNING_RATE)
     self.criterion = nn.MSELoss()
     self.total_training_steps = 0
     self.losses = []
     self.scores = []
     self.game_counter = 0
-    self.logger.info(f"Training initialized. Epsilon starts at {self.epsilon}, learning rate at {LEARNING_RATE}")
+    self.logger.info(f"Training initialized. Temperature starts at {self.temperature}, learning rate at {LEARNING_RATE}")
 
 def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_state: dict, events: List[str]):
     """Process game events and store transitions."""
@@ -53,9 +53,9 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
         self.target_network.load_state_dict(self.q_network.state_dict())
         self.logger.info(f"Target network updated at step {self.total_training_steps}")
 
-    # Update epsilon for exploration-exploitation balance
-    self.epsilon = max(EPSILON_END, EPSILON_START * np.exp(-1. * self.total_training_steps / EPSILON_DECAY))
-    self.logger.debug(f"Epsilon decayed to {self.epsilon:.4f}")
+    # Update temperature for exploration-exploitation balance
+    self.temperature = max(TEMPERATURE_END, TEMPERATURE_START * np.exp(-1. * self.total_training_steps / TEMPERATURE_DECAY))
+    self.logger.debug(f"Temperature decayed to {self.temperature:.4f}")
     self.total_training_steps += 1
 
 def end_of_round(self, last_game_state: dict, last_action: str, events: List[str]):
@@ -85,7 +85,7 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
     # Create graphs every 100 games
     if self.game_counter % 100 == 0:
         avg_score = np.mean(self.scores[-100:])
-        self.logger.info(f"Game {self.game_counter}: Epsilon {self.epsilon:.4f}, Avg. score (last 100 games): {avg_score:.2f}")
+        self.logger.info(f"Game {self.game_counter}: Temperature {self.temperature:.4f}, Avg. score (last 100 games): {avg_score:.2f}")
         create_graphs(self)
 
     self.game_counter += 1
