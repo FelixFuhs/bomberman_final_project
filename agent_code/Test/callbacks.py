@@ -74,12 +74,9 @@ def setup(self):
 
     # Initialize additional tracking metrics
     self.total_rewards = []
-    self.bombs_dropped = []
-    self.crates_destroyed = []
-    self.coins_collected = []
 
 def act(self, game_state: dict) -> str:
-    """Choose an action based on Q-values and softmax action selection."""
+    """Choose an action based on Q-values."""
     features = state_to_features(game_state)
     if features is None:
         return np.random.choice(ACTIONS)
@@ -90,14 +87,17 @@ def act(self, game_state: dict) -> str:
         q_values = self.q_network(features).squeeze()
         self.logger.debug(f"Q-values: {q_values.tolist()}")  # Log Q-values
 
-    # Subtract max Q-value to prevent numerical instability in softmax
-    q_values_adjusted = q_values - q_values.max()
+    if self.train:
+        # Subtract max Q-value to prevent numerical instability in softmax
+        q_values_adjusted = q_values - q_values.max()
+        # Apply temperature scaling to control exploration
+        softmax_probs = torch.softmax(q_values_adjusted / self.temperature, dim=0).cpu().numpy()
+        # Sample an action according to the softmax probabilities
+        action_index = np.random.choice(len(ACTIONS), p=softmax_probs)
+    else:
+        # Select action with the highest Q-value during evaluation
+        action_index = torch.argmax(q_values).item()
 
-    # Apply temperature scaling to control exploration
-    softmax_probs = torch.softmax(q_values_adjusted / self.temperature, dim=0).cpu().numpy()
-
-    # Sample an action according to the softmax probabilities
-    action_index = np.random.choice(len(ACTIONS), p=softmax_probs)
     action = ACTIONS[action_index]
 
     return action
@@ -212,7 +212,6 @@ def create_graphs(self):
     """Generate and save performance and loss graphs."""
     create_performance_graph(self)
     create_loss_graph(self)
-    create_additional_metrics_graph(self)
     logger.info(f"Graphs created for game {self.game_counter}, Total steps: {self.total_training_steps}")
 
 def create_performance_graph(self):
@@ -259,49 +258,3 @@ def create_loss_graph(self):
         plt.tight_layout()
         plt.savefig(f'loss_graph_{self.total_training_steps}.png')
         plt.close()
-
-def create_additional_metrics_graph(self):
-    """Create and save graphs for additional metrics like total rewards, bombs dropped, etc."""
-    if len(self.total_rewards) > 0:
-        plt.figure(figsize=(16, 9))
-        plt.plot(range(1, len(self.total_rewards) + 1), self.total_rewards, label='Total Rewards', color='green')
-        plt.xlabel('Game Number')
-        plt.ylabel('Total Rewards')
-        plt.title('Total Rewards over Games')
-        plt.legend()
-        plt.grid(True)
-        plt.savefig(f'total_rewards_graph_{self.game_counter}.png')
-        plt.close()
-
-  #  if len(self.bombs_dropped) > 0:
-    #    plt.figure(figsize=(16, 9))
-    #    plt.plot(range(1, len(self.bombs_dropped) + 1), self.bombs_dropped, label='Bombs Dropped', color='orange')
-    #    plt.xlabel('Game Number')
-    #   plt.ylabel('Bombs Dropped')
-    #    plt.title('Bombs Dropped over Games')
-    #    plt.legend()
-    #    plt.grid(True)
-    #    plt.savefig(f'bombs_dropped_graph_{self.game_counter}.png')
-    #    plt.close()
-
-   # if len(self.crates_destroyed) > 0:
-    #    plt.figure(figsize=(16, 9))
-    #    plt.plot(range(1, len(self.crates_destroyed) + 1), self.crates_destroyed, label='Crates Destroyed', color='purple')
-    #    plt.xlabel('Game Number')
-    #    plt.ylabel('Crates Destroyed')
-    #    plt.title('Crates Destroyed over Games')
-    #    plt.legend()
-    #    plt.grid(True)
-    #    plt.savefig(f'crates_destroyed_graph_{self.game_counter}.png')
-    #    plt.close()
-
-   # if len(self.coins_collected) > 0:
-    #    plt.figure(figsize=(16, 9))
-    #    plt.plot(range(1, len(self.coins_collected) + 1), self.coins_collected, label='Coins Collected', color='gold')
-    #    plt.xlabel('Game Number')
-    #    plt.ylabel('Coins Collected')
-    #    plt.title('Coins Collected over Games')
-    #    plt.legend()
-    #    plt.grid(True)
-    #    plt.savefig(f'coins_collected_graph_{self.game_counter}.png')
-    #    plt.close()

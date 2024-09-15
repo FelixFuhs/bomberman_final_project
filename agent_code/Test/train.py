@@ -29,9 +29,6 @@ def setup_training(self):
 
     # Initialize tracking metrics
     self.total_rewards = []
-    self.bombs_dropped = []
-    self.crates_destroyed = []
-    self.coins_collected = []
 
 def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_state: dict, events: List[str]):
     """Process game events and store transitions."""
@@ -81,19 +78,19 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
         if loss:
             self.losses.append(loss)
 
-    # Save the model
-    torch.save(self.q_network.state_dict(), "dqn_model.pt")
-    self.logger.info(f"Model saved after round {self.game_counter}")
+    # Save the model with exception handling
+    try:
+        torch.save(self.q_network.state_dict(), "dqn_model.pt")
+        self.logger.info(f"Model saved after round {self.game_counter}")
+    except Exception as e:
+        self.logger.error(f"Error saving model: {e}")
 
     # Track game performance
     self.scores.append(last_game_state['self'][1])
 
-    # Track additional metrics
+    # Track total rewards
     total_reward = sum(self.rewards_episode)
     self.total_rewards.append(total_reward)
-    self.bombs_dropped.append(events.count(e.BOMB_DROPPED))
-    self.crates_destroyed.append(events.count(e.CRATE_DESTROYED))
-    self.coins_collected.append(events.count(e.COIN_COLLECTED))
 
     # Reset rewards for the next episode
     self.rewards_episode = []
