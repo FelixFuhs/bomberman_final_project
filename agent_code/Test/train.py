@@ -146,6 +146,6 @@ def reward_from_events(self, events: List[str]) -> int:
         e.MOVED_RIGHT: -0.01,
         e.MOVED_UP: -0.01,
         e.KILLED_SELF: -6,
-        e.BOMB_DROPPED: 1,
+        e.BOMB_DROPPED: 3,
     }
     return sum(game_rewards.get(event, 0) for event in events)
