@@ -5,9 +5,8 @@ import torch
 import torch.nn as nn
 import logging
 import matplotlib.pyplot as plt
-from matplotlib.ticker import FuncFormatter
 from collections import deque
-from .config import LEARNING_RATE, ACTIONS, TEMPERATURE_START  # Importing necessary hyperparameters from config
+from .config import LEARNING_RATE, ACTIONS, TEMPERATURE_START  # Import necessary hyperparameters from config
 
 # Set up logging
 logging.basicConfig(filename='agent.log', level=logging.INFO)
@@ -17,11 +16,15 @@ logger = logging.getLogger(__name__)
 class DQN(nn.Module):
     def __init__(self, input_size, output_size):
         super(DQN, self).__init__()
-        self.fc1 = nn.Linear(input_size, 128)
-        self.fc2 = nn.Linear(128, 64)
-        self.fc3 = nn.Linear(64, output_size)
+        # Increased the number of layers and neurons to enhance learning capacity
+        self.fc1 = nn.Linear(input_size, 512)   # First hidden layer with 512 neurons
+        self.fc2 = nn.Linear(512, 256)          # Second hidden layer with 256 neurons
+        self.fc3 = nn.Linear(256, 128)          # Third hidden layer with 128 neurons
+        self.fc4 = nn.Linear(128, 64)           # Fourth hidden layer with 64 neurons
+        self.fc5 = nn.Linear(64, 32)            # Fifth hidden layer with 32 neurons
+        self.fc6 = nn.Linear(32, output_size)   # Output layer
 
-        # Initialize weights
+        # Initialize weights using Xavier initialization for better convergence
         self.apply(self._init_weights)
     
     def _init_weights(self, module):
@@ -31,13 +34,17 @@ class DQN(nn.Module):
                 nn.init.constant_(module.bias, 0)
 
     def forward(self, x):
+        # Pass data through the network with ReLU activations
         x = torch.relu(self.fc1(x))
         x = torch.relu(self.fc2(x))
-        return self.fc3(x)
+        x = torch.relu(self.fc3(x))
+        x = torch.relu(self.fc4(x))
+        x = torch.relu(self.fc5(x))
+        return self.fc6(x)  # Output layer without activation
 
 def setup(self):
     self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    input_size = 12  # Adjusted to match the new feature vector size
+    input_size = 17  # Adjusted to match the new feature vector size
 
     self.q_network = DQN(input_size, len(ACTIONS)).to(self.device)
     self.target_network = DQN(input_size, len(ACTIONS)).to(self.device)
@@ -65,6 +72,12 @@ def setup(self):
     self.game_counter = 0
     self.total_training_steps = 0  # Track total training steps
 
+    # Initialize additional tracking metrics
+    self.total_rewards = []
+    self.bombs_dropped = []
+    self.crates_destroyed = []
+    self.coins_collected = []
+
 def act(self, game_state: dict) -> str:
     """Choose an action based on Q-values and softmax action selection."""
     features = state_to_features(game_state)
@@ -77,10 +90,10 @@ def act(self, game_state: dict) -> str:
         q_values = self.q_network(features).squeeze()
         self.logger.debug(f"Q-values: {q_values.tolist()}")  # Log Q-values
 
-    # Subtract max Q-value to prevent numerical instability
+    # Subtract max Q-value to prevent numerical instability in softmax
     q_values_adjusted = q_values - q_values.max()
 
-    # Apply temperature scaling
+    # Apply temperature scaling to control exploration
     softmax_probs = torch.softmax(q_values_adjusted / self.temperature, dim=0).cpu().numpy()
 
     # Sample an action according to the softmax probabilities
@@ -114,55 +127,83 @@ def state_to_features(game_state: dict) -> np.ndarray:
     coins = game_state['coins']
     bombs = game_state['bombs']
     others = [xy for (_, _, _, xy) in game_state['others']]
-    
+
+    # Initialize bomb map
+    bomb_map = np.ones(arena.shape) * 5  # Distance to the nearest bomb
+    for (bx, by), t in bombs:
+        for (i, j) in [(bx + h, by) for h in range(-3, 4)] + [(bx, by + h) for h in range(-3, 4)]:
+            if 0 <= i < arena.shape[0] and 0 <= j < arena.shape[1]:
+                bomb_map[i, j] = min(bomb_map[i, j], t)
+
     # Feature 1-4: Valid moves (UP, DOWN, LEFT, RIGHT)
     valid_up = is_move_valid(x, y - 1, game_state)
     valid_down = is_move_valid(x, y + 1, game_state)
     valid_left = is_move_valid(x - 1, y, game_state)
     valid_right = is_move_valid(x + 1, y, game_state)
 
-    # Feature 5: Bomb availability
-    bomb_available = game_state['self'][2]  # 1 if the agent can place a bomb, 0 otherwise
+    # Feature 5: Bomb availability (binary feature)
+    bomb_available = int(game_state['self'][2])  # 1 if the agent can place a bomb, 0 otherwise
 
-    # Feature 6: Nearest coin distance
-    nearest_coin_dist = min([abs(x - cx) + abs(y - cy) for (cx, cy) in coins]) if coins else -1
+    # Feature 6: Nearest coin distance (normalized)
+    if coins:
+        nearest_coin_dist = min([abs(x - cx) + abs(y - cy) for (cx, cy) in coins]) / (arena.shape[0] + arena.shape[1])
+    else:
+        nearest_coin_dist = -1  # No coins left
 
-    # Feature 7: Proximity to nearest opponent
-    nearest_opponent_dist = min([abs(x - ox) + abs(y - oy) for (ox, oy) in others]) if others else -1
+    # Feature 7: Proximity to nearest opponent (normalized)
+    if others:
+        nearest_opponent_dist = min([abs(x - ox) + abs(y - oy) for (ox, oy) in others]) / (arena.shape[0] + arena.shape[1])
+    else:
+        nearest_opponent_dist = -1  # No opponents
 
-    # Feature 8: Proximity to bombs (closest bomb and blast danger)
-    bomb_map = np.ones(arena.shape) * 5  # Distance to the nearest bomb
-    for (bx, by), t in bombs:
-        for (i, j) in [(bx + h, by) for h in range(-3, 4)] + [(bx, by + h) for h in range(-3, 4)]:
-            if 0 <= i < arena.shape[0] and 0 <= j < arena.shape[1]:
-                bomb_map[i, j] = min(bomb_map[i, j], t)
-    nearest_bomb_dist = bomb_map[x, y] if bombs else -1
+    # Feature 8: Proximity to bombs (normalized)
+    if bombs:
+        bomb_dists = [abs(x - bx) + abs(y - by) for (bx, by), _ in bombs]
+        nearest_bomb_dist = min(bomb_dists) / (arena.shape[0] + arena.shape[1])
+    else:
+        nearest_bomb_dist = -1  # No bombs
 
-    # Feature 9: In a dead end (binary feature, 1 if in dead end)
-    dead_end = 1 if (
-        arena[x + 1, y] == -1
-        and arena[x - 1, y] == -1
-        and arena[x, y + 1] == -1
-        and arena[x, y - 1] == -1
-    ) else 0
+    # Feature 9: In a dead end (binary feature)
+    walls = [arena[x + dx, y + dy] == -1 for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1)]]
+    dead_end = int(sum(walls) >= 3)
 
-    # Feature 10: Number of adjacent crates
+    # Feature 10: Number of adjacent crates (normalized)
     adjacent_crates = sum(
         [arena[x + dx, y + dy] == 1 for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1)]]
-    )
+    ) / 4  # Normalize by maximum possible adjacent crates
 
     # Feature 11: Normalized step count (current step / max steps)
     normalized_step = game_state['step'] / 400
 
-    # Feature 12: Static bias feature (can help in learning)
+    # Feature 12: Bias feature (constant value)
     bias_feature = 1  # A constant feature to help the network learn bias
+
+    # Additional Features
+
+    # Feature 13: Number of valid actions (normalized)
+    num_valid_actions = sum([valid_up, valid_down, valid_left, valid_right]) / 4.0
+
+    # Feature 14: Number of crates left (normalized)
+    num_crates_left = np.sum(arena == 1) / ((arena.shape[0] - 2) * (arena.shape[1] - 2))  # Exclude walls
+
+    # Feature 15: Is agent adjacent to a bomb about to explode (binary)
+    adjacent_positions = [(x + dx, y + dy) for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]]
+    adjacent_bomb = int(any(bomb_map[pos] <= 3 for pos in adjacent_positions if 0 <= pos[0] < arena.shape[0] and 0 <= pos[1] < arena.shape[1]))
+
+    # Feature 16: Time until explosion at agent's position (normalized)
+    time_until_explosion = bomb_map[x, y] / 5.0  # Normalize by maximum bomb timer
+
+    # Feature 17: Is agent adjacent to an opponent (binary)
+    adjacent_opponent = int(any(pos in others for pos in adjacent_positions))
 
     # Combine all features into a single feature vector
     features = [
-        valid_up, valid_down, valid_left, valid_right, 
-        bomb_available, nearest_coin_dist, nearest_opponent_dist, 
-        nearest_bomb_dist, dead_end, adjacent_crates, 
-        normalized_step, bias_feature
+        valid_up, valid_down, valid_left, valid_right,
+        bomb_available, nearest_coin_dist, nearest_opponent_dist,
+        nearest_bomb_dist, dead_end, adjacent_crates,
+        normalized_step, bias_feature,
+        num_valid_actions, num_crates_left, adjacent_bomb,
+        time_until_explosion, adjacent_opponent
     ]
     
     return np.array(features, dtype=np.float32)
@@ -171,6 +212,7 @@ def create_graphs(self):
     """Generate and save performance and loss graphs."""
     create_performance_graph(self)
     create_loss_graph(self)
+    create_additional_metrics_graph(self)
     logger.info(f"Graphs created for game {self.game_counter}, Total steps: {self.total_training_steps}")
 
 def create_performance_graph(self):
@@ -217,3 +259,49 @@ def create_loss_graph(self):
         plt.tight_layout()
         plt.savefig(f'loss_graph_{self.total_training_steps}.png')
         plt.close()
+
+def create_additional_metrics_graph(self):
+    """Create and save graphs for additional metrics like total rewards, bombs dropped, etc."""
+    if len(self.total_rewards) > 0:
+        plt.figure(figsize=(16, 9))
+        plt.plot(range(1, len(self.total_rewards) + 1), self.total_rewards, label='Total Rewards', color='green')
+        plt.xlabel('Game Number')
+        plt.ylabel('Total Rewards')
+        plt.title('Total Rewards over Games')
+        plt.legend()
+        plt.grid(True)
+        plt.savefig(f'total_rewards_graph_{self.game_counter}.png')
+        plt.close()
+
+  #  if len(self.bombs_dropped) > 0:
+    #    plt.figure(figsize=(16, 9))
+    #    plt.plot(range(1, len(self.bombs_dropped) + 1), self.bombs_dropped, label='Bombs Dropped', color='orange')
+    #    plt.xlabel('Game Number')
+    #   plt.ylabel('Bombs Dropped')
+    #    plt.title('Bombs Dropped over Games')
+    #    plt.legend()
+    #    plt.grid(True)
+    #    plt.savefig(f'bombs_dropped_graph_{self.game_counter}.png')
+    #    plt.close()
+
+   # if len(self.crates_destroyed) > 0:
+    #    plt.figure(figsize=(16, 9))
+    #    plt.plot(range(1, len(self.crates_destroyed) + 1), self.crates_destroyed, label='Crates Destroyed', color='purple')
+    #    plt.xlabel('Game Number')
+    #    plt.ylabel('Crates Destroyed')
+    #    plt.title('Crates Destroyed over Games')
+    #    plt.legend()
+    #    plt.grid(True)
+    #    plt.savefig(f'crates_destroyed_graph_{self.game_counter}.png')
+    #    plt.close()
+
+   # if len(self.coins_collected) > 0:
+    #    plt.figure(figsize=(16, 9))
+    #    plt.plot(range(1, len(self.coins_collected) + 1), self.coins_collected, label='Coins Collected', color='gold')
+    #    plt.xlabel('Game Number')
+    #    plt.ylabel('Coins Collected')
+    #    plt.title('Coins Collected over Games')
+    #    plt.legend()
+    #    plt.grid(True)
+    #    plt.savefig(f'coins_collected_graph_{self.game_counter}.png')
+    #    plt.close()

@@ -27,6 +27,12 @@ def setup_training(self):
     self.game_counter = 0
     self.logger.info(f"Training initialized. Temperature starts at {self.temperature}, learning rate at {LEARNING_RATE}")
 
+    # Initialize tracking metrics
+    self.total_rewards = []
+    self.bombs_dropped = []
+    self.crates_destroyed = []
+    self.coins_collected = []
+
 def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_state: dict, events: List[str]):
     """Process game events and store transitions."""
     self.logger.debug(f"Events: {events} at step {new_game_state['step']}")
@@ -82,10 +88,21 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
     # Track game performance
     self.scores.append(last_game_state['self'][1])
 
+    # Track additional metrics
+    total_reward = sum(self.rewards_episode)
+    self.total_rewards.append(total_reward)
+    self.bombs_dropped.append(events.count(e.BOMB_DROPPED))
+    self.crates_destroyed.append(events.count(e.CRATE_DESTROYED))
+    self.coins_collected.append(events.count(e.COIN_COLLECTED))
+
+    # Reset rewards for the next episode
+    self.rewards_episode = []
+
     # Create graphs every 100 games
     if self.game_counter % 100 == 0:
         avg_score = np.mean(self.scores[-100:])
-        self.logger.info(f"Game {self.game_counter}: Temperature {self.temperature:.4f}, Avg. score (last 100 games): {avg_score:.2f}")
+        avg_reward = np.mean(self.total_rewards[-100:]) if len(self.total_rewards) >= 100 else np.mean(self.total_rewards)
+        self.logger.info(f"Game {self.game_counter}: Temperature {self.temperature:.4f}, Avg. score (last 100 games): {avg_score:.2f}, Avg. reward: {avg_reward:.2f}")
         create_graphs(self)
 
     self.game_counter += 1
@@ -134,18 +151,26 @@ def optimize_model(self):
 def reward_from_events(self, events: List[str]) -> int:
     """Translate game events into rewards."""
     game_rewards = {
-        e.COIN_COLLECTED: 3,
-        e.KILLED_OPPONENT: 5,
-        e.INVALID_ACTION: -1,
-        e.WAITED: -0.5,
-        e.KILLED_SELF: -5,
-        e.SURVIVED_ROUND: 0.05,
-        e.CRATE_DESTROYED: 1,
+        e.COIN_COLLECTED: 5,        # Increased reward to encourage collecting coins
+        e.KILLED_OPPONENT: 10,      # Increased reward for killing opponents
+        e.INVALID_ACTION: -2,       # Increased penalty for invalid actions
+        e.WAITED: -1,               # Increased penalty for waiting
+        e.KILLED_SELF: -10,         # Increased penalty for self-destruction
+        e.SURVIVED_ROUND: 1,        # Increased reward for survival
+        e.CRATE_DESTROYED: 2,       # Increased reward for destroying crates
         e.MOVED_DOWN: -0.01,
         e.MOVED_LEFT: -0.01,
         e.MOVED_RIGHT: -0.01,
         e.MOVED_UP: -0.01,
-        e.KILLED_SELF: -6,
-        e.BOMB_DROPPED: 3,
+        e.BOMB_DROPPED: 1,          # Slight reward for dropping bombs
+        e.GOT_KILLED: -5,           # Penalty for being killed
+        e.OPPONENT_ELIMINATED: 5,   # Reward for eliminating an opponent
     }
-    return sum(game_rewards.get(event, 0) for event in events)
+
+    # Track rewards for logging
+    reward = sum(game_rewards.get(event, 0) for event in events)
+    if not hasattr(self, 'rewards_episode'):
+        self.rewards_episode = []
+    self.rewards_episode.append(reward)
+
+    return reward
