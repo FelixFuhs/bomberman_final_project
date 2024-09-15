@@ -151,7 +151,7 @@ def reward_from_events(self, events: List[str], game_state: dict) -> int:
     """Translate game events into rewards."""
     game_rewards = {
         e.COIN_COLLECTED: 5,        # Increased reward to encourage collecting coins
-        e.KILLED_OPPONENT: 10,      # Increased reward for killing opponents
+        e.KILLED_OPPONENT: 15,      # Increased reward for killing opponents
         e.INVALID_ACTION: -2,       # Increased penalty for invalid actions
         e.WAITED: -1,               # Increased penalty for waiting
         e.KILLED_SELF: -10,         # Increased penalty for self-destruction
