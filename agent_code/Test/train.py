@@ -29,6 +29,7 @@ def setup_training(self):
 
     # Initialize tracking metrics
     self.total_rewards = []
+    self.positions_visited = set()  # To track unique positions visited in an episode
 
 def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_state: dict, events: List[str]):
     """Process game events and store transitions."""
@@ -37,7 +38,7 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
     # Convert game states to features
     old_features = state_to_features(old_game_state)
     new_features = state_to_features(new_game_state)
-    reward = reward_from_events(self, events)
+    reward = reward_from_events(self, events, new_game_state)
 
     # Store transition in replay buffer
     if old_features is not None and new_features is not None:
@@ -67,7 +68,7 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
 
     # Final transition
     last_features = state_to_features(last_game_state)
-    reward = reward_from_events(self, events)
+    reward = reward_from_events(self, events, last_game_state)
     if last_features is not None:
         self.transitions.append(Transition(last_features, last_action, None, reward))
         self.logger.debug(f"Final transition stored. Buffer size: {len(self.transitions)}")
@@ -92,8 +93,9 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
     total_reward = sum(self.rewards_episode)
     self.total_rewards.append(total_reward)
 
-    # Reset rewards for the next episode
+    # Reset rewards and positions for the next episode
     self.rewards_episode = []
+    self.positions_visited = set()
 
     # Create graphs every 100 games
     if self.game_counter % 100 == 0:
@@ -145,7 +147,7 @@ def optimize_model(self):
 
     return loss.item()
 
-def reward_from_events(self, events: List[str]) -> int:
+def reward_from_events(self, events: List[str], game_state: dict) -> int:
     """Translate game events into rewards."""
     game_rewards = {
         e.COIN_COLLECTED: 5,        # Increased reward to encourage collecting coins
@@ -164,8 +166,20 @@ def reward_from_events(self, events: List[str]) -> int:
         e.OPPONENT_ELIMINATED: 5,   # Reward for eliminating an opponent
     }
 
+    # Reward for exploring new unique positions
+    position = game_state['self'][3]
+    if position not in self.positions_visited:
+        exploration_reward = 0.1  # Small positive reward for visiting a new position
+        events.append('MOVED_TO_NEW_POSITION')
+        self.positions_visited.add(position)
+    else:
+        exploration_reward = 0
+
+    # Define custom event for moving to a new position
+    game_rewards['MOVED_TO_NEW_POSITION'] = 0.1
+
     # Track rewards for logging
-    reward = sum(game_rewards.get(event, 0) for event in events)
+    reward = sum(game_rewards.get(event, 0) for event in events) + exploration_reward
     if not hasattr(self, 'rewards_episode'):
         self.rewards_episode = []
     self.rewards_episode.append(reward)
