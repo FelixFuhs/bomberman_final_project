@@ -75,6 +75,7 @@ def setup(self):
 
     # Initialize additional tracking metrics
     self.total_rewards = []
+    self.coordinate_history = deque([], 15) # Track the last 15 positions
 
 def act(self, game_state: dict) -> str:
     """Choose an action based on Q-values."""

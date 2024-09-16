@@ -30,7 +30,7 @@ def setup_training(self):
     # Initialize tracking metrics
     self.total_rewards = []
     self.positions_visited = set()  # To track unique positions visited in an episode 
-    self.coordinate_history = deque([], 5) # Track the last 5 positions
+    self.coordinate_history = deque([], 15) # Track the last 15 positions
 
 def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_state: dict, events: List[str]):
     """Process game events and store transitions."""
@@ -97,7 +97,7 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
     # Reset rewards and positions for the next episode
     self.rewards_episode = []
     self.positions_visited = set()
-    self.coordinate_history = deque([], 5)
+    self.coordinate_history = deque([], 15)
 
     # Create graphs every 100 games
     if self.game_counter % 100 == 0:
@@ -152,17 +152,17 @@ def optimize_model(self):
 def reward_from_events(self, events: List[str], game_state: dict) -> int:
     """Translate game events into rewards."""
     game_rewards = {
-        e.COIN_COLLECTED: 5,        # Increased reward to encourage collecting coins
+        e.COIN_COLLECTED: 7,        # Increased reward to encourage collecting coins
         e.KILLED_OPPONENT: 15,      # Increased reward for killing opponents
         e.INVALID_ACTION: -2,       # Increased penalty for invalid actions
         e.WAITED: -1,               # Increased penalty for waiting
         e.KILLED_SELF: -10,         # Increased penalty for self-destruction
         e.SURVIVED_ROUND: 1,        # Increased reward for survival
         e.CRATE_DESTROYED: 2,       # Increased reward for destroying crates
-        e.MOVED_DOWN: -0.01,
-        e.MOVED_LEFT: -0.01,
-        e.MOVED_RIGHT: -0.01,
-        e.MOVED_UP: -0.01,
+        e.MOVED_DOWN: -0.05,
+        e.MOVED_LEFT: -0.05,
+        e.MOVED_RIGHT: -0.05,
+        e.MOVED_UP: -0.05,
         e.BOMB_DROPPED: 1,          # Slight reward for dropping bombs
         e.GOT_KILLED: -5,           # Penalty for being killed
         e.OPPONENT_ELIMINATED: 5,   # Reward for eliminating an opponent
@@ -178,7 +178,7 @@ def reward_from_events(self, events: List[str], game_state: dict) -> int:
         exploration_reward = 0
 
     if position in self.coordinate_history:
-        return_penalty = -1
+        return_penalty = -2
         events.append('MOVED_TO_RECENT_POSITION')    
     else:
         return_penalty = 0
