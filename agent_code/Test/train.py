@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import events as e
-from .callbacks import state_to_features, ACTIONS, create_graphs
+from .callbacks import state_to_features, ACTIONS, create_graphs  # Import create_graphs
 from .config import (TRANSITION_HISTORY_SIZE, BATCH_SIZE, GAMMA, TARGET_UPDATE, 
                      LEARNING_RATE, TEMPERATURE_START, TEMPERATURE_END, TEMPERATURE_DECAY)
 
@@ -30,7 +30,8 @@ def setup_training(self):
     # Initialize tracking metrics
     self.total_rewards = []
     self.positions_visited = set()  # To track unique positions visited in an episode 
-    self.coordinate_history = deque([], 15) # Track the last 15 positions
+    self.coordinate_history = deque([], 15)  # Track the last 15 positions
+    self.rewards_episode = []
 
 def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_state: dict, events: List[str]):
     """Process game events and store transitions."""
@@ -101,10 +102,10 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
 
     # Create graphs every 100 games
     if self.game_counter % 100 == 0:
-        avg_score = np.mean(self.scores[-100:])
+        avg_score = np.mean(self.scores[-100:]) if len(self.scores) >= 100 else np.mean(self.scores)
         avg_reward = np.mean(self.total_rewards[-100:]) if len(self.total_rewards) >= 100 else np.mean(self.total_rewards)
         self.logger.info(f"Game {self.game_counter}: Temperature {self.temperature:.4f}, Avg. score (last 100 games): {avg_score:.2f}, Avg. reward: {avg_reward:.2f}")
-        create_graphs(self)
+        create_graphs(self)  # Use create_graphs(self) instead of self.create_graphs()
 
     self.game_counter += 1
 
@@ -120,9 +121,8 @@ def optimize_model(self):
     # Mask for non-final states
     non_final_mask = torch.tensor([s is not None for s in batch.next_state], device=self.device, dtype=torch.bool)
 
-    # Convert the list of non-final next states to a numpy array before converting to a tensor
-    non_final_next_states = np.array([s for s in batch.next_state if s is not None])
-    non_final_next_states = torch.tensor(non_final_next_states, device=self.device, dtype=torch.float32)
+    # Convert the list of non-final next states to a tensor
+    non_final_next_states = torch.tensor([s for s in batch.next_state if s is not None], device=self.device, dtype=torch.float32)
 
     state_batch = torch.tensor(np.array(batch.state), device=self.device, dtype=torch.float32)
     action_batch = torch.tensor([ACTIONS.index(a) for a in batch.action], device=self.device, dtype=torch.long).unsqueeze(1)
@@ -166,33 +166,26 @@ def reward_from_events(self, events: List[str], game_state: dict) -> int:
         e.BOMB_DROPPED: 1,          # Slight reward for dropping bombs
         e.GOT_KILLED: -5,           # Penalty for being killed
         e.OPPONENT_ELIMINATED: 5,   # Reward for eliminating an opponent
+        'MOVED_TO_NEW_POSITION': 0.1,       # Small reward for exploring
+        'MOVED_TO_RECENT_POSITION': -1      # Penalty for revisiting recent positions
     }
 
-    # Reward for exploring new unique positions
+    # Check for custom events
     position = game_state['self'][3]
     if position not in self.positions_visited:
-        exploration_reward = 0.1  # Small positive reward for visiting a new position
         events.append('MOVED_TO_NEW_POSITION')
-        self.positions_visited.add(position)
     else:
-        exploration_reward = 0
+        if position in self.coordinate_history:
+            events.append('MOVED_TO_RECENT_POSITION')
 
-    if position in self.coordinate_history:
-        return_penalty = -2
-        events.append('MOVED_TO_RECENT_POSITION')    
-    else:
-        return_penalty = 0
+    # Update position tracking
+    self.positions_visited.add(position)
+    self.coordinate_history.append(position)
 
-    # Define custom event for moving to a new position
-    game_rewards['MOVED_TO_NEW_POSITION'] = 0.1
-
-    # Define custom event for moving to a recently visited position
-    game_rewards['MOVED_TO_RECENT_POSITION'] = -1
+    # Calculate total reward
+    reward = sum(game_rewards.get(event, 0) for event in events)
 
     # Track rewards for logging
-    reward = sum(game_rewards.get(event, 0) for event in events) + exploration_reward + return_penalty
-    if not hasattr(self, 'rewards_episode'):
-        self.rewards_episode = []
     self.rewards_episode.append(reward)
 
     return reward

@@ -43,16 +43,15 @@ class DQN(nn.Module):
         return self.fc6(x)  # Output layer without activation
 
 def setup(self):
-    #self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     self.device = "cpu"
-    input_size = 21  # Adjusted to match the new feature vector size
+    input_size = 23  # Adjusted to match the new feature vector size (added 2 new features)
 
     self.q_network = DQN(input_size, len(ACTIONS)).to(self.device)
     self.target_network = DQN(input_size, len(ACTIONS)).to(self.device)
 
     if os.path.exists("dqn_model.pt"):
         try:
-            state_dict = torch.load("dqn_model.pt", map_location=self.device)
+            state_dict = torch.load("dqn_model.pt", map_location=self.device, weights_only=True)
             self.q_network.load_state_dict(state_dict)
             self.target_network.load_state_dict(state_dict)
             logger.info("DQN model loaded successfully.")
@@ -75,14 +74,14 @@ def setup(self):
 
     # Initialize additional tracking metrics
     self.total_rewards = []
-    self.coordinate_history = deque([], 15) # Track the last 15 positions
+    self.positions_visited = set()
+    self.coordinate_history = deque([], 15)  # Track the last 15 positions
 
 def act(self, game_state: dict) -> str:
     """Choose an action based on Q-values."""
     features = state_to_features(game_state)
     if features is None:
-        
-        self.logger.debug(f"chose a random action")  # Log Q-values
+        self.logger.debug(f"No features extracted, choosing a random action.")
         return np.random.choice(ACTIONS)
 
     features = torch.from_numpy(features).float().unsqueeze(0).to(self.device)
@@ -98,6 +97,7 @@ def act(self, game_state: dict) -> str:
         softmax_probs = torch.softmax(q_values_adjusted / self.temperature, dim=0).cpu().numpy()
         # Sample an action according to the softmax probabilities
         action_index = np.random.choice(len(ACTIONS), p=softmax_probs)
+        self.logger.debug(f"Action probabilities: {softmax_probs}")
     else:
         # Select action with the highest Q-value during evaluation
         action_index = torch.argmax(q_values).item()
@@ -105,14 +105,11 @@ def act(self, game_state: dict) -> str:
     action = ACTIONS[action_index]
 
     # Track the current position
-    if not hasattr(self, 'positions_visited'):
-        self.positions_visited = set()
     self.positions_visited.add(game_state['self'][3])
-
     # Add current position to the deque
     self.coordinate_history.append(game_state['self'][3])
 
-    self.logger.debug(f"Chosen Action: " + action)  # Log Q-values
+    self.logger.debug(f"Chosen Action: {action}")
     return action
 
 def is_move_valid(x, y, game_state):
@@ -217,9 +214,21 @@ def state_to_features(game_state: dict) -> np.ndarray:
     # Feature 19: Is agent adjacent to an opponent (binary)
     adjacent_opponent = int(any(pos in others for pos in adjacent_positions))
 
-    # Feature 20: Agent's own position (normalized)
+    # Feature 20-21: Agent's own position (normalized)
     agent_pos_x = x / arena.shape[0]
     agent_pos_y = y / arena.shape[1]
+
+    # Feature 22-23: Nearest crate delta x and delta y (normalized)
+    crates = np.argwhere(arena == 1)
+    if crates.size > 0:
+        distances = [(cx - x, cy - y) for (cx, cy) in crates]
+        nearest_crate_dx, nearest_crate_dy = min(distances, key=lambda d: abs(d[0]) + abs(d[1]))
+        max_distance = arena.shape[0] + arena.shape[1]
+        nearest_crate_dx /= max_distance
+        nearest_crate_dy /= max_distance
+    else:
+        nearest_crate_dx = 0  # No crates left
+        nearest_crate_dy = 0  # No crates left
 
     # Combine all features into a single feature vector
     features = [
@@ -228,7 +237,8 @@ def state_to_features(game_state: dict) -> np.ndarray:
         num_coins_remaining, nearest_opponent_dist, nearest_bomb_dist,
         dead_end, adjacent_crates, normalized_step, bias_feature,
         num_valid_actions, num_crates_left, adjacent_bomb,
-        time_until_explosion, adjacent_opponent, agent_pos_x, agent_pos_y
+        time_until_explosion, adjacent_opponent, agent_pos_x, agent_pos_y,
+        nearest_crate_dx, nearest_crate_dy  # New features added here
     ]
 
     return np.array(features, dtype=np.float32)
