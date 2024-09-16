@@ -29,7 +29,8 @@ def setup_training(self):
 
     # Initialize tracking metrics
     self.total_rewards = []
-    self.positions_visited = set()  # To track unique positions visited in an episode
+    self.positions_visited = set()  # To track unique positions visited in an episode 
+    self.coordinate_history = deque([], 5) # Track the last 5 positions
 
 def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_state: dict, events: List[str]):
     """Process game events and store transitions."""
@@ -96,6 +97,7 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
     # Reset rewards and positions for the next episode
     self.rewards_episode = []
     self.positions_visited = set()
+    self.coordinate_history = deque([], 5)
 
     # Create graphs every 100 games
     if self.game_counter % 100 == 0:
@@ -175,11 +177,20 @@ def reward_from_events(self, events: List[str], game_state: dict) -> int:
     else:
         exploration_reward = 0
 
+    if position in self.coordinate_history:
+        return_penalty = -1
+        events.append('MOVED_TO_RECENT_POSITION')    
+    else:
+        return_penalty = 0
+
     # Define custom event for moving to a new position
     game_rewards['MOVED_TO_NEW_POSITION'] = 0.1
 
+    # Define custom event for moving to a recently visited position
+    game_rewards['MOVED_TO_RECENT_POSITION'] = -1
+
     # Track rewards for logging
-    reward = sum(game_rewards.get(event, 0) for event in events) + exploration_reward
+    reward = sum(game_rewards.get(event, 0) for event in events) + exploration_reward + return_penalty
     if not hasattr(self, 'rewards_episode'):
         self.rewards_episode = []
     self.rewards_episode.append(reward)

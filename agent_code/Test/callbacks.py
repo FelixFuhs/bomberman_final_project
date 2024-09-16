@@ -43,7 +43,8 @@ class DQN(nn.Module):
         return self.fc6(x)  # Output layer without activation
 
 def setup(self):
-    self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    #self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    self.device = "cpu"
     input_size = 21  # Adjusted to match the new feature vector size
 
     self.q_network = DQN(input_size, len(ACTIONS)).to(self.device)
@@ -79,6 +80,8 @@ def act(self, game_state: dict) -> str:
     """Choose an action based on Q-values."""
     features = state_to_features(game_state)
     if features is None:
+        
+        self.logger.debug(f"chose a random action")  # Log Q-values
         return np.random.choice(ACTIONS)
 
     features = torch.from_numpy(features).float().unsqueeze(0).to(self.device)
@@ -105,6 +108,10 @@ def act(self, game_state: dict) -> str:
         self.positions_visited = set()
     self.positions_visited.add(game_state['self'][3])
 
+    # Add current position to the deque
+    self.coordinate_history.append(game_state['self'][3])
+
+    self.logger.debug(f"Chosen Action: " + action)  # Log Q-values
     return action
 
 def is_move_valid(x, y, game_state):
