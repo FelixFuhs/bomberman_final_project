@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import events as e
-from .callbacks import state_to_features, ACTIONS, create_graphs  # Import create_graphs
+from .callbacks import state_to_features, ACTIONS, create_graphs, count_crates_destroyed  # Import count_crates_destroyed
 from .config import (TRANSITION_HISTORY_SIZE, BATCH_SIZE, GAMMA, TARGET_UPDATE, 
                      LEARNING_RATE, TEMPERATURE_START, TEMPERATURE_END, TEMPERATURE_DECAY)
 
@@ -122,6 +122,7 @@ def optimize_model(self):
     non_final_mask = torch.tensor([s is not None for s in batch.next_state], device=self.device, dtype=torch.bool)
 
     # Convert the list of non-final next states to a tensor
+    # Reverting back to the original code that causes the warning
     non_final_next_states = torch.tensor([s for s in batch.next_state if s is not None], device=self.device, dtype=torch.float32)
 
     state_batch = torch.tensor(np.array(batch.state), device=self.device, dtype=torch.float32)
@@ -158,12 +159,12 @@ def reward_from_events(self, events: List[str], game_state: dict) -> int:
         e.WAITED: -1,               # Increased penalty for waiting
         e.KILLED_SELF: -10,         # Increased penalty for self-destruction
         e.SURVIVED_ROUND: 1,        # Increased reward for survival
-        e.CRATE_DESTROYED: 2,       # Increased reward for destroying crates
+        e.CRATE_DESTROYED: 2,       # Reward per crate destroyed
         e.MOVED_DOWN: -0.05,
         e.MOVED_LEFT: -0.05,
         e.MOVED_RIGHT: -0.05,
         e.MOVED_UP: -0.05,
-        e.BOMB_DROPPED: 1,          # Slight reward for dropping bombs
+        e.BOMB_DROPPED: 0,          # Base reward for dropping bombs, adjusted below
         e.GOT_KILLED: -5,           # Penalty for being killed
         e.OPPONENT_ELIMINATED: 5,   # Reward for eliminating an opponent
         'MOVED_TO_NEW_POSITION': 0.1,       # Small reward for exploring
@@ -172,6 +173,9 @@ def reward_from_events(self, events: List[str], game_state: dict) -> int:
 
     # Check for custom events
     position = game_state['self'][3]
+    x, y = position
+    arena = game_state['field']
+
     if position not in self.positions_visited:
         events.append('MOVED_TO_NEW_POSITION')
     else:
@@ -181,6 +185,17 @@ def reward_from_events(self, events: List[str], game_state: dict) -> int:
     # Update position tracking
     self.positions_visited.add(position)
     self.coordinate_history.append(position)
+
+    # Adjust reward for BOMB_DROPPED
+    if e.BOMB_DROPPED in events:
+        crates_destroyed = count_crates_destroyed(arena, x, y)
+        if crates_destroyed > 0:
+            # Positive reward proportional to potential crates destroyed
+            bomb_reward = crates_destroyed * 2  # Adjust coefficient as needed
+            game_rewards[e.BOMB_DROPPED] = bomb_reward
+        else:
+            # Negative reward for unnecessary bomb
+            game_rewards[e.BOMB_DROPPED] = -2
 
     # Calculate total reward
     reward = sum(game_rewards.get(event, 0) for event in events)

@@ -44,14 +44,14 @@ class DQN(nn.Module):
 
 def setup(self):
     self.device = "cpu"
-    input_size = 23  # Adjusted to match the new feature vector size (added 2 new features)
+    input_size = 24  # Adjusted to match the new feature vector size (added 1 new feature)
 
     self.q_network = DQN(input_size, len(ACTIONS)).to(self.device)
     self.target_network = DQN(input_size, len(ACTIONS)).to(self.device)
 
     if os.path.exists("dqn_model.pt"):
         try:
-            state_dict = torch.load("dqn_model.pt", map_location=self.device, weights_only=True)
+            state_dict = torch.load("dqn_model.pt", map_location=self.device)
             self.q_network.load_state_dict(state_dict)
             self.target_network.load_state_dict(state_dict)
             logger.info("DQN model loaded successfully.")
@@ -126,6 +126,24 @@ def is_move_valid(x, y, game_state):
     if any((ox, oy) == (x, y) for _, _, _, (ox, oy) in others):
         return False
     return True
+
+def count_crates_destroyed(arena, x, y):
+    """Count the number of crates that would be destroyed by placing a bomb at position (x, y)."""
+    count = 0
+    for dx, dy in [(1,0), (-1,0), (0,1), (0,-1)]:
+        for i in range(1, 4):
+            nx, ny = x + dx*i, y + dy*i
+            if 0 <= nx < arena.shape[0] and 0 <= ny < arena.shape[1]:
+                if arena[nx, ny] == -1:  # Wall
+                    break
+                elif arena[nx, ny] == 1:  # Crate
+                    count += 1
+                    break  # Bomb blast stops at the first obstacle
+                else:
+                    continue
+            else:
+                break
+    return count
 
 def state_to_features(game_state: dict) -> np.ndarray:
     """Convert the game state into a feature vector."""
@@ -230,6 +248,9 @@ def state_to_features(game_state: dict) -> np.ndarray:
         nearest_crate_dx = 0  # No crates left
         nearest_crate_dy = 0  # No crates left
 
+    # Feature 24: Number of crates that would be destroyed by placing a bomb at current position (normalized)
+    potential_crates_destroyed = count_crates_destroyed(arena, x, y) / 4.0  # Normalize by max possible (4 crates)
+
     # Combine all features into a single feature vector
     features = [
         valid_up, valid_down, valid_left, valid_right,
@@ -238,7 +259,8 @@ def state_to_features(game_state: dict) -> np.ndarray:
         dead_end, adjacent_crates, normalized_step, bias_feature,
         num_valid_actions, num_crates_left, adjacent_bomb,
         time_until_explosion, adjacent_opponent, agent_pos_x, agent_pos_y,
-        nearest_crate_dx, nearest_crate_dy  # New features added here
+        nearest_crate_dx, nearest_crate_dy,
+        potential_crates_destroyed  # New feature added here
     ]
 
     return np.array(features, dtype=np.float32)
