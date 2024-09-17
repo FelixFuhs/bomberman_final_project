@@ -8,7 +8,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import events as e
-from .callbacks import state_to_features, ACTIONS, create_graphs, count_crates_destroyed  # Import count_crates_destroyed
+from .callbacks import (state_to_features, ACTIONS, create_graphs, count_crates_destroyed,
+                        get_safe_escape_routes)  # Import necessary functions
 from .config import (TRANSITION_HISTORY_SIZE, BATCH_SIZE, GAMMA, TARGET_UPDATE, 
                      LEARNING_RATE, TEMPERATURE_START, TEMPERATURE_END, TEMPERATURE_DECAY)
 
@@ -157,9 +158,9 @@ def reward_from_events(self, events: List[str], game_state: dict) -> int:
         e.KILLED_OPPONENT: 15,      # Increased reward for killing opponents
         e.INVALID_ACTION: -2,       # Increased penalty for invalid actions
         e.WAITED: -1,               # Increased penalty for waiting
-        e.KILLED_SELF: -10,         # Increased penalty for self-destruction
+        e.KILLED_SELF: -20,         # Increased penalty for self-destruction
         e.SURVIVED_ROUND: 1,        # Increased reward for survival
-        e.CRATE_DESTROYED: 2,       # Reward per crate destroyed
+        e.CRATE_DESTROYED: 4,       # Reward per crate destroyed
         e.MOVED_DOWN: -0.05,
         e.MOVED_LEFT: -0.05,
         e.MOVED_RIGHT: -0.05,
@@ -168,13 +169,16 @@ def reward_from_events(self, events: List[str], game_state: dict) -> int:
         e.GOT_KILLED: -5,           # Penalty for being killed
         e.OPPONENT_ELIMINATED: 5,   # Reward for eliminating an opponent
         'MOVED_TO_NEW_POSITION': 0.1,       # Small reward for exploring
-        'MOVED_TO_RECENT_POSITION': -1      # Penalty for revisiting recent positions
+        'MOVED_TO_RECENT_POSITION': -1,     # Penalty for revisiting recent positions
+        'BAD_BOMB_PLACEMENT': -4,           # Penalty for placing a bomb with no safe escape routes
+        'ESCAPED_BOMB': 5                   # Reward for successfully escaping after placing a bomb
     }
 
     # Check for custom events
     position = game_state['self'][3]
     x, y = position
     arena = game_state['field']
+    bombs = game_state['bombs']
 
     if position not in self.positions_visited:
         events.append('MOVED_TO_NEW_POSITION')
@@ -189,13 +193,27 @@ def reward_from_events(self, events: List[str], game_state: dict) -> int:
     # Adjust reward for BOMB_DROPPED
     if e.BOMB_DROPPED in events:
         crates_destroyed = count_crates_destroyed(arena, x, y)
-        if crates_destroyed > 0:
+        safe_escape_routes = get_safe_escape_routes(arena, x, y, np.ones(arena.shape) * 5)
+        if crates_destroyed > 0 and safe_escape_routes > 0:
             # Positive reward proportional to potential crates destroyed
             bomb_reward = crates_destroyed * 2  # Adjust coefficient as needed
             game_rewards[e.BOMB_DROPPED] = bomb_reward
+        elif safe_escape_routes == 0:
+            # Negative reward for placing a bomb with no escape
+            events.append('BAD_BOMB_PLACEMENT')
+            game_rewards[e.BOMB_DROPPED] = -5
         else:
             # Negative reward for unnecessary bomb
             game_rewards[e.BOMB_DROPPED] = -2
+
+    # Reward for escaping bomb blast
+    if e.MOVED_UP in events or e.MOVED_DOWN in events or e.MOVED_LEFT in events or e.MOVED_RIGHT in events:
+        if bombs:
+            # If agent is moving away from a bomb
+            for (bx, by), _ in bombs:
+                if abs(bx - x) + abs(by - y) <= 4:
+                    events.append('ESCAPED_BOMB')
+                    break
 
     # Calculate total reward
     reward = sum(game_rewards.get(event, 0) for event in events)

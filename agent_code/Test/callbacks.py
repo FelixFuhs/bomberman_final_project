@@ -20,9 +20,10 @@ class DQN(nn.Module):
         self.fc1 = nn.Linear(input_size, 512)   # First hidden layer with 512 neurons
         self.fc2 = nn.Linear(512, 256)          # Second hidden layer with 256 neurons
         self.fc3 = nn.Linear(256, 128)          # Third hidden layer with 128 neurons
-        self.fc4 = nn.Linear(128, 64)           # Fourth hidden layer with 64 neurons
-        self.fc5 = nn.Linear(64, 32)            # Fifth hidden layer with 32 neurons
-        self.fc6 = nn.Linear(32, output_size)   # Output layer
+        self.fc4 = nn.Linear(128, 128)          # Fourth hidden layer with 128 neurons (added)
+        self.fc5 = nn.Linear(128, 64)           # Fifth hidden layer with 64 neurons
+        self.fc6 = nn.Linear(64, 32)            # Sixth hidden layer with 32 neurons
+        self.fc7 = nn.Linear(32, output_size)   # Output layer
 
         # Initialize weights using Xavier initialization
         self.apply(self._init_weights)
@@ -38,13 +39,14 @@ class DQN(nn.Module):
         x = torch.relu(self.fc1(x))
         x = torch.relu(self.fc2(x))
         x = torch.relu(self.fc3(x))
-        x = torch.relu(self.fc4(x))
+        x = torch.relu(self.fc4(x))  # New layer included
         x = torch.relu(self.fc5(x))
-        return self.fc6(x)  # Output layer without activation
+        x = torch.relu(self.fc6(x))
+        return self.fc7(x)  # Output layer without activation
 
 def setup(self):
     self.device = "cpu"
-    input_size = 24  # Adjusted to match the new feature vector size (added 1 new feature)
+    input_size = 26  # Adjusted to match the new feature vector size (added 2 new features)
 
     self.q_network = DQN(input_size, len(ACTIONS)).to(self.device)
     self.target_network = DQN(input_size, len(ACTIONS)).to(self.device)
@@ -145,6 +147,55 @@ def count_crates_destroyed(arena, x, y):
                 break
     return count
 
+def get_safe_escape_routes(arena, x, y, bomb_map):
+    """Calculate the number of safe escape routes after placing a bomb."""
+    safe_routes = 0
+    for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
+        nx, ny = x + dx, y + dy
+        if 0 <= nx < arena.shape[0] and 0 <= ny < arena.shape[1]:
+            if arena[nx, ny] == 0 and bomb_map[nx, ny] > 0:
+                # Check if there is a path to safety from this tile
+                if is_path_to_safety(arena, nx, ny, bomb_map):
+                    safe_routes += 1
+    return safe_routes / 4.0  # Normalize by maximum possible routes (4)
+
+def is_path_to_safety(arena, x, y, bomb_map):
+    """Check if there is a path from (x, y) to a safe tile."""
+    visited = set()
+    queue = deque()
+    queue.append((x, y))
+    while queue:
+        cx, cy = queue.popleft()
+        if bomb_map[cx, cy] > 0:
+            return True
+        for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
+            nx, ny = cx + dx, cy + dy
+            if 0 <= nx < arena.shape[0] and 0 <= ny < arena.shape[1]:
+                if (arena[nx, ny] == 0 or arena[nx, ny] == 2) and (nx, ny) not in visited:
+                    if bomb_map[nx, ny] > 0:
+                        return True
+                    visited.add((nx, ny))
+                    queue.append((nx, ny))
+    return False
+
+def distance_to_nearest_safe_tile(arena, x, y, bomb_map):
+    """Calculate the distance to the nearest safe tile."""
+    visited = set()
+    queue = deque()
+    queue.append((x, y, 0))  # (position x, position y, distance)
+    while queue:
+        cx, cy, dist = queue.popleft()
+        if bomb_map[cx, cy] > 0:
+            max_distance = arena.shape[0] + arena.shape[1]
+            return dist / max_distance  # Normalize by max possible distance
+        for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
+            nx, ny = cx + dx, cy + dy
+            if 0 <= nx < arena.shape[0] and 0 <= ny < arena.shape[1]:
+                if (arena[nx, ny] == 0 or arena[nx, ny] == 2) and (nx, ny) not in visited:
+                    visited.add((nx, ny))
+                    queue.append((nx, ny, dist + 1))
+    return 1.0  # If no safe tile is found, return maximum normalized distance
+
 def state_to_features(game_state: dict) -> np.ndarray:
     """Convert the game state into a feature vector."""
     if game_state is None:
@@ -159,9 +210,17 @@ def state_to_features(game_state: dict) -> np.ndarray:
     # Initialize bomb map
     bomb_map = np.ones(arena.shape) * 5  # Distance to the nearest bomb
     for (bx, by), t in bombs:
-        for (i, j) in [(bx + h, by) for h in range(-3, 4)] + [(bx, by + h) for h in range(-3, 4)]:
-            if 0 <= i < arena.shape[0] and 0 <= j < arena.shape[1]:
-                bomb_map[i, j] = min(bomb_map[i, j], t)
+        for i in range(-3, 4):
+            ix, iy = bx + i, by
+            if 0 <= ix < arena.shape[0]:
+                if arena[ix, iy] == -1:
+                    break
+                bomb_map[ix, iy] = min(bomb_map[ix, iy], t)
+            ix, iy = bx, by + i
+            if 0 <= iy < arena.shape[1]:
+                if arena[ix, iy] == -1:
+                    break
+                bomb_map[ix, iy] = min(bomb_map[ix, iy], t)
 
     # Feature 1-4: Valid moves (UP, DOWN, LEFT, RIGHT)
     valid_up = is_move_valid(x, y - 1, game_state)
@@ -251,6 +310,12 @@ def state_to_features(game_state: dict) -> np.ndarray:
     # Feature 24: Number of crates that would be destroyed by placing a bomb at current position (normalized)
     potential_crates_destroyed = count_crates_destroyed(arena, x, y) / 4.0  # Normalize by max possible (4 crates)
 
+    # Feature 25: Number of safe escape routes after bomb placement (normalized)
+    safe_escape_routes = get_safe_escape_routes(arena, x, y, bomb_map)
+
+    # Feature 26: Distance to nearest safe tile (normalized)
+    distance_to_safe_tile = distance_to_nearest_safe_tile(arena, x, y, bomb_map)
+
     # Combine all features into a single feature vector
     features = [
         valid_up, valid_down, valid_left, valid_right,
@@ -260,7 +325,9 @@ def state_to_features(game_state: dict) -> np.ndarray:
         num_valid_actions, num_crates_left, adjacent_bomb,
         time_until_explosion, adjacent_opponent, agent_pos_x, agent_pos_y,
         nearest_crate_dx, nearest_crate_dy,
-        potential_crates_destroyed  # New feature added here
+        potential_crates_destroyed,
+        safe_escape_routes,
+        distance_to_safe_tile  # New features added here
     ]
 
     return np.array(features, dtype=np.float32)
