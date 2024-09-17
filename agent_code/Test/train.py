@@ -122,7 +122,6 @@ def optimize_model(self):
     non_final_mask = torch.tensor([s is not None for s in batch.next_state], device=self.device, dtype=torch.bool)
 
     # Convert the list of non-final next states to a tensor
-    # Reverting back to the original code that causes the warning
     non_final_next_states = torch.tensor([s for s in batch.next_state if s is not None], device=self.device, dtype=torch.float32)
 
     state_batch = torch.tensor(np.array(batch.state), device=self.device, dtype=torch.float32)
@@ -196,6 +195,10 @@ def reward_from_events(self, events: List[str], game_state: dict) -> int:
         else:
             # Negative reward for unnecessary bomb
             game_rewards[e.BOMB_DROPPED] = -2
+
+    # Additional penalties to prevent self-destructive behavior
+    if 'MOVED_TO_RECENT_POSITION' in events:
+        game_rewards['MOVED_TO_RECENT_POSITION'] = -1
 
     # Calculate total reward
     reward = sum(game_rewards.get(event, 0) for event in events)

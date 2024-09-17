@@ -17,12 +17,13 @@ class DQN(nn.Module):
     def __init__(self, input_size, output_size):
         super(DQN, self).__init__()
         # Neural network with increased capacity
-        self.fc1 = nn.Linear(input_size, 512)   # First hidden layer with 512 neurons
-        self.fc2 = nn.Linear(512, 256)          # Second hidden layer with 256 neurons
-        self.fc3 = nn.Linear(256, 128)          # Third hidden layer with 128 neurons
-        self.fc4 = nn.Linear(128, 64)           # Fourth hidden layer with 64 neurons
-        self.fc5 = nn.Linear(64, 32)            # Fifth hidden layer with 32 neurons
-        self.fc6 = nn.Linear(32, output_size)   # Output layer
+        self.fc1 = nn.Linear(input_size, 600)   # First hidden layer with 600 neurons
+        self.fc2 = nn.Linear(600, 512)          # Second hidden layer with 512 neurons
+        self.fc3 = nn.Linear(512, 256)          # Third hidden layer with 256 neurons
+        self.fc4 = nn.Linear(256, 128)          # Fourth hidden layer with 128 neurons
+        self.fc5 = nn.Linear(128, 64)           # Fifth hidden layer with 64 neurons
+        self.fc6 = nn.Linear(64, 32)            # Sixth hidden layer with 32 neurons
+        self.fc7 = nn.Linear(32, output_size)   # Output layer
 
         # Initialize weights using Xavier initialization
         self.apply(self._init_weights)
@@ -40,11 +41,12 @@ class DQN(nn.Module):
         x = torch.relu(self.fc3(x))
         x = torch.relu(self.fc4(x))
         x = torch.relu(self.fc5(x))
-        return self.fc6(x)  # Output layer without activation
+        x = torch.relu(self.fc6(x))
+        return self.fc7(x)  # Output layer without activation
 
 def setup(self):
     self.device = "cpu"
-    input_size = 24  # Adjusted to match the new feature vector size (added 1 new feature)
+    input_size = 30  # Adjusted to match the new feature vector size
 
     self.q_network = DQN(input_size, len(ACTIONS)).to(self.device)
     self.target_network = DQN(input_size, len(ACTIONS)).to(self.device)
@@ -145,6 +147,16 @@ def count_crates_destroyed(arena, x, y):
                 break
     return count
 
+def get_escape_routes(arena, x, y, bomb_map):
+    """Calculate the number of safe directions the agent can move to after placing a bomb."""
+    safe_directions = 0
+    for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]:
+        nx, ny = x + dx, y + dy
+        if is_move_valid(nx, ny, {'field': arena, 'bombs': [], 'others': []}):
+            if bomb_map[nx, ny] > 0:
+                safe_directions += 1
+    return safe_directions
+
 def state_to_features(game_state: dict) -> np.ndarray:
     """Convert the game state into a feature vector."""
     if game_state is None:
@@ -188,7 +200,8 @@ def state_to_features(game_state: dict) -> np.ndarray:
 
     # Feature 9: Proximity to nearest opponent (normalized)
     if others:
-        nearest_opponent_dist = min([abs(x - ox) + abs(y - oy) for (ox, oy) in others]) / (arena.shape[0] + arena.shape[1])
+        opponent_distances = [abs(x - ox) + abs(y - oy) for (ox, oy) in others]
+        nearest_opponent_dist = min(opponent_distances) / (arena.shape[0] + arena.shape[1])
     else:
         nearest_opponent_dist = -1  # No opponents
 
@@ -251,6 +264,43 @@ def state_to_features(game_state: dict) -> np.ndarray:
     # Feature 24: Number of crates that would be destroyed by placing a bomb at current position (normalized)
     potential_crates_destroyed = count_crates_destroyed(arena, x, y) / 4.0  # Normalize by max possible (4 crates)
 
+    # New Features for Task 2
+
+    # Feature 25: Escape routes after bomb placement (normalized)
+    escape_routes = get_escape_routes(arena, x, y, bomb_map) / 4.0  # Normalize by max possible (4 directions)
+
+    # Feature 26: Is bomb placement safe (binary)
+    is_bomb_placement_safe = int(escape_routes > 0)
+
+    # Feature 27: Crates in bomb range (normalized)
+    crates_in_bomb_range = potential_crates_destroyed  # Already normalized
+
+    # Feature 28: Distance to nearest safe tile (normalized)
+    # Using BFS to find nearest safe tile not in bomb blast radius
+    from collections import deque
+    visited = set()
+    queue = deque()
+    queue.append((x, y, 0))
+    nearest_safe_distance = arena.shape[0] + arena.shape[1]  # Max possible distance
+    while queue:
+        cx, cy, dist = queue.popleft()
+        if bomb_map[cx, cy] > 0:
+            nearest_safe_distance = dist
+            break
+        for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]:
+            nx, ny = cx + dx, cy + dy
+            if (0 <= nx < arena.shape[0]) and (0 <= ny < arena.shape[1]):
+                if (nx, ny) not in visited and arena[nx, ny] == 0:
+                    visited.add((nx, ny))
+                    queue.append((nx, ny, dist + 1))
+    distance_to_nearest_safe_tile = nearest_safe_distance / (arena.shape[0] + arena.shape[1])  # Normalize
+
+    # Feature 29: Bomb threat level at current position (normalized)
+    bomb_threat_level = (5.0 - bomb_map[x, y]) / 5.0  # Higher value means more urgent threat
+
+    # Feature 30: Is agent in bomb blast zone (binary)
+    is_in_bomb_blast_zone = int(bomb_map[x, y] <= 3)
+
     # Combine all features into a single feature vector
     features = [
         valid_up, valid_down, valid_left, valid_right,
@@ -259,8 +309,9 @@ def state_to_features(game_state: dict) -> np.ndarray:
         dead_end, adjacent_crates, normalized_step, bias_feature,
         num_valid_actions, num_crates_left, adjacent_bomb,
         time_until_explosion, adjacent_opponent, agent_pos_x, agent_pos_y,
-        nearest_crate_dx, nearest_crate_dy,
-        potential_crates_destroyed  # New feature added here
+        nearest_crate_dx, nearest_crate_dy, potential_crates_destroyed,
+        escape_routes, is_bomb_placement_safe, crates_in_bomb_range,
+        distance_to_nearest_safe_tile, bomb_threat_level, is_in_bomb_blast_zone  # New features added here
     ]
 
     return np.array(features, dtype=np.float32)
