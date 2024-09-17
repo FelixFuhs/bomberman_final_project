@@ -9,7 +9,7 @@ import torch.nn as nn
 import torch.optim as optim
 import events as e
 from .callbacks import (state_to_features, ACTIONS, count_crates_destroyed,
-                        get_safe_escape_routes)  # Import necessary functions
+                        get_safe_escape_routes, create_graphs)  # Import necessary functions
 from .config import (TRANSITION_HISTORY_SIZE, BATCH_SIZE, GAMMA, TARGET_UPDATE, 
                      LEARNING_RATE, TEMPERATURE_START, TEMPERATURE_END, TEMPERATURE_DECAY)
 
@@ -41,7 +41,7 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
     # Convert game states to features
     old_features = state_to_features(old_game_state)
     new_features = state_to_features(new_game_state)
-    reward = reward_from_events(self, events, new_game_state)
+    reward = self.reward_from_events(events, new_game_state)
 
     # Store transition in replay buffer
     if old_features is not None and new_features is not None:
@@ -50,7 +50,7 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
 
     # Optimize the model if we have enough samples
     if len(self.transitions) >= BATCH_SIZE:
-        loss = optimize_model(self)
+        loss = self.optimize_model()
         if loss is not None:
             self.losses.append(loss)
             self.logger.debug(f"Optimization done. Loss: {loss}")
@@ -71,14 +71,14 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
 
     # Final transition
     last_features = state_to_features(last_game_state)
-    reward = reward_from_events(self, events, last_game_state)
+    reward = self.reward_from_events(events, last_game_state)
     if last_features is not None:
         self.transitions.append(Transition(last_features, last_action, None, reward))
         self.logger.debug(f"Final transition stored. Buffer size: {len(self.transitions)}")
 
     # Perform final optimization step
     if len(self.transitions) >= BATCH_SIZE:
-        loss = optimize_model(self)
+        loss = self.optimize_model()
         if loss:
             self.losses.append(loss)
 
@@ -106,7 +106,7 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
         avg_score = np.mean(self.scores[-100:]) if len(self.scores) >= 100 else np.mean(self.scores)
         avg_reward = np.mean(self.total_rewards[-100:]) if len(self.total_rewards) >= 100 else np.mean(self.total_rewards)
         self.logger.info(f"Game {self.game_counter}: Temperature {self.temperature:.4f}, Avg. score (last 100 games): {avg_score:.2f}, Avg. reward: {avg_reward:.2f}")
-        create_graphs(self)  # Use create_graphs(self) instead of self.create_graphs()
+        create_graphs(self)  # Correctly call the function
 
     self.game_counter += 1
 

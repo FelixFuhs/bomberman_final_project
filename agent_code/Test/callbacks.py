@@ -78,6 +78,7 @@ def setup(self):
     self.total_rewards = []
     self.positions_visited = set()
     self.coordinate_history = deque([], 15)  # Track the last 15 positions
+    self.rewards_episode = []
 
 def act(self, game_state: dict) -> str:
     """Choose an action based on Q-values."""
@@ -356,12 +357,11 @@ def state_to_features(game_state: dict) -> np.ndarray:
 
     return np.array(features, dtype=np.float32)
 
-
 def create_graphs(self):
     """Generate and save performance and loss graphs."""
-    create_performance_graph(self)
-    create_loss_graph(self)
-    create_total_rewards_graph(self)
+    self.create_performance_graph()
+    self.create_loss_graph()
+    self.create_total_rewards_graph()
     logger.info(f"Graphs created for game {self.game_counter}, Total steps: {self.total_training_steps}")
 
 def create_performance_graph(self):
