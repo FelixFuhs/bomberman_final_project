@@ -46,7 +46,7 @@ class DQN(nn.Module):
 
 def setup(self):
     self.device = "cpu"
-    input_size = 26  # Adjusted to match the new feature vector size (added 2 new features)
+    input_size = 26  # Adjusted to match the feature vector size
 
     self.q_network = DQN(input_size, len(ACTIONS)).to(self.device)
     self.target_network = DQN(input_size, len(ACTIONS)).to(self.device)
@@ -149,11 +149,12 @@ def count_crates_destroyed(arena, x, y):
 
 def get_safe_escape_routes(arena, x, y, bomb_map):
     """Calculate the number of safe escape routes after placing a bomb."""
+    safe_time = 4  # Tiles with bomb_map >= safe_time are considered safe
     safe_routes = 0
     for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
         nx, ny = x + dx, y + dy
         if 0 <= nx < arena.shape[0] and 0 <= ny < arena.shape[1]:
-            if arena[nx, ny] == 0 and bomb_map[nx, ny] > 0:
+            if arena[nx, ny] == 0 and bomb_map[nx, ny] >= safe_time:
                 # Check if there is a path to safety from this tile
                 if is_path_to_safety(arena, nx, ny, bomb_map):
                     safe_routes += 1
@@ -161,37 +162,38 @@ def get_safe_escape_routes(arena, x, y, bomb_map):
 
 def is_path_to_safety(arena, x, y, bomb_map):
     """Check if there is a path from (x, y) to a safe tile."""
+    safe_time = 4  # Tiles with bomb_map >= safe_time are considered safe
     visited = set()
     queue = deque()
     queue.append((x, y))
     while queue:
         cx, cy = queue.popleft()
-        if bomb_map[cx, cy] > 0:
+        if bomb_map[cx, cy] >= safe_time:
+            # We have found a safe tile
             return True
-        for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
+        for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]:
             nx, ny = cx + dx, cy + dy
-            if 0 <= nx < arena.shape[0] and 0 <= ny < arena.shape[1]:
-                if (arena[nx, ny] == 0 or arena[nx, ny] == 2) and (nx, ny) not in visited:
-                    if bomb_map[nx, ny] > 0:
-                        return True
+            if (0 <= nx < arena.shape[0]) and (0 <= ny < arena.shape[1]):
+                if (arena[nx, ny] == 0) and ((nx, ny) not in visited):
                     visited.add((nx, ny))
                     queue.append((nx, ny))
     return False
 
 def distance_to_nearest_safe_tile(arena, x, y, bomb_map):
     """Calculate the distance to the nearest safe tile."""
+    safe_time = 4
     visited = set()
     queue = deque()
     queue.append((x, y, 0))  # (position x, position y, distance)
     while queue:
         cx, cy, dist = queue.popleft()
-        if bomb_map[cx, cy] > 0:
+        if bomb_map[cx, cy] >= safe_time:
             max_distance = arena.shape[0] + arena.shape[1]
             return dist / max_distance  # Normalize by max possible distance
-        for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
+        for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]:
             nx, ny = cx + dx, cy + dy
-            if 0 <= nx < arena.shape[0] and 0 <= ny < arena.shape[1]:
-                if (arena[nx, ny] == 0 or arena[nx, ny] == 2) and (nx, ny) not in visited:
+            if (0 <= nx < arena.shape[0]) and (0 <= ny < arena.shape[1]):
+                if (arena[nx, ny] == 0) and ((nx, ny) not in visited):
                     visited.add((nx, ny))
                     queue.append((nx, ny, dist + 1))
     return 1.0  # If no safe tile is found, return maximum normalized distance
@@ -210,17 +212,39 @@ def state_to_features(game_state: dict) -> np.ndarray:
     # Initialize bomb map
     bomb_map = np.ones(arena.shape) * 5  # Distance to the nearest bomb
     for (bx, by), t in bombs:
-        for i in range(-3, 4):
-            ix, iy = bx + i, by
-            if 0 <= ix < arena.shape[0]:
-                if arena[ix, iy] == -1:
-                    break
-                bomb_map[ix, iy] = min(bomb_map[ix, iy], t)
+        bomb_map[bx, by] = min(bomb_map[bx, by], t)
+        # Up
+        for i in range(1, 4):
+            ix, iy = bx, by - i
+            if iy < 0 or arena[ix, iy] == -1:
+                break
+            bomb_map[ix, iy] = min(bomb_map[ix, iy], t)
+            if arena[ix, iy] != 0:
+                break  # Bomb blast stops at first obstacle
+        # Down
+        for i in range(1, 4):
             ix, iy = bx, by + i
-            if 0 <= iy < arena.shape[1]:
-                if arena[ix, iy] == -1:
-                    break
-                bomb_map[ix, iy] = min(bomb_map[ix, iy], t)
+            if iy >= arena.shape[1] or arena[ix, iy] == -1:
+                break
+            bomb_map[ix, iy] = min(bomb_map[ix, iy], t)
+            if arena[ix, iy] != 0:
+                break
+        # Left
+        for i in range(1, 4):
+            ix, iy = bx - i, by
+            if ix < 0 or arena[ix, iy] == -1:
+                break
+            bomb_map[ix, iy] = min(bomb_map[ix, iy], t)
+            if arena[ix, iy] != 0:
+                break
+        # Right
+        for i in range(1, 4):
+            ix, iy = bx + i, by
+            if ix >= arena.shape[0] or arena[ix, iy] == -1:
+                break
+            bomb_map[ix, iy] = min(bomb_map[ix, iy], t)
+            if arena[ix, iy] != 0:
+                break
 
     # Feature 1-4: Valid moves (UP, DOWN, LEFT, RIGHT)
     valid_up = is_move_valid(x, y - 1, game_state)
@@ -331,6 +355,7 @@ def state_to_features(game_state: dict) -> np.ndarray:
     ]
 
     return np.array(features, dtype=np.float32)
+
 
 def create_graphs(self):
     """Generate and save performance and loss graphs."""

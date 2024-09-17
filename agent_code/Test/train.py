@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import events as e
-from .callbacks import (state_to_features, ACTIONS, create_graphs, count_crates_destroyed,
+from .callbacks import (state_to_features, ACTIONS, count_crates_destroyed,
                         get_safe_escape_routes)  # Import necessary functions
 from .config import (TRANSITION_HISTORY_SIZE, BATCH_SIZE, GAMMA, TARGET_UPDATE, 
                      LEARNING_RATE, TEMPERATURE_START, TEMPERATURE_END, TEMPERATURE_DECAY)
@@ -123,8 +123,7 @@ def optimize_model(self):
     non_final_mask = torch.tensor([s is not None for s in batch.next_state], device=self.device, dtype=torch.bool)
 
     # Convert the list of non-final next states to a tensor
-    # Reverting back to the original code that causes the warning
-    non_final_next_states = torch.tensor([s for s in batch.next_state if s is not None], device=self.device, dtype=torch.float32)
+    non_final_next_states = torch.stack([torch.tensor(s, device=self.device) for s in batch.next_state if s is not None])
 
     state_batch = torch.tensor(np.array(batch.state), device=self.device, dtype=torch.float32)
     action_batch = torch.tensor([ACTIONS.index(a) for a in batch.action], device=self.device, dtype=torch.long).unsqueeze(1)
@@ -193,7 +192,9 @@ def reward_from_events(self, events: List[str], game_state: dict) -> int:
     # Adjust reward for BOMB_DROPPED
     if e.BOMB_DROPPED in events:
         crates_destroyed = count_crates_destroyed(arena, x, y)
-        safe_escape_routes = get_safe_escape_routes(arena, x, y, np.ones(arena.shape) * 5)
+        # Update bomb_map here if needed
+        bomb_map = np.ones(arena.shape) * 5  # Initialize bomb_map with high values
+        safe_escape_routes = get_safe_escape_routes(arena, x, y, bomb_map)
         if crates_destroyed > 0 and safe_escape_routes > 0:
             # Positive reward proportional to potential crates destroyed
             bomb_reward = crates_destroyed * 2  # Adjust coefficient as needed
