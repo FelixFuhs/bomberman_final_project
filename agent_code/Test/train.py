@@ -1,3 +1,5 @@
+# train.py
+
 import os
 import random
 from collections import namedtuple, deque
@@ -8,9 +10,15 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import events as e
-from .callbacks import state_to_features, ACTIONS, create_graphs, count_crates_destroyed  # Import count_crates_destroyed
-from .config import (TRANSITION_HISTORY_SIZE, BATCH_SIZE, GAMMA, TARGET_UPDATE, 
-                     LEARNING_RATE, TEMPERATURE_START, TEMPERATURE_END, TEMPERATURE_DECAY)
+from .callbacks import (
+    state_to_features, ACTIONS, create_graphs, count_crates_destroyed,
+    get_escape_routes  # Added get_escape_routes to the import
+)
+from .config import (
+    TRANSITION_HISTORY_SIZE, BATCH_SIZE, GAMMA, TARGET_UPDATE,
+    LEARNING_RATE, TEMPERATURE_START, TEMPERATURE_END, TEMPERATURE_DECAY
+)
+import settings as s  # Import settings
 
 # Transition tuple for storing experiences
 Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'))
@@ -38,8 +46,17 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
     self.logger.debug(f"Events: {events} at step {new_game_state['step']}")
 
     # Convert game states to features
-    old_features = state_to_features(old_game_state)
-    new_features = state_to_features(new_game_state)
+    old_features = state_to_features(self, old_game_state)
+    new_features = state_to_features(self, new_game_state)
+
+    # Detect 'ESCAPED_BOMB' event
+    if old_game_state is not None and new_game_state is not None:
+        old_pos = old_game_state['self'][3]
+        new_pos = new_game_state['self'][3]
+        bomb_map = create_bomb_map(old_game_state)
+        if bomb_map[old_pos] <= 3 and bomb_map[new_pos] > bomb_map[old_pos]:
+            events.append('ESCAPED_BOMB')
+
     reward = reward_from_events(self, events, new_game_state)
 
     # Store transition in replay buffer
@@ -69,7 +86,7 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
     self.logger.info(f"End of round. Events: {events}")
 
     # Final transition
-    last_features = state_to_features(last_game_state)
+    last_features = state_to_features(self, last_game_state)
     reward = reward_from_events(self, events, last_game_state)
     if last_features is not None:
         self.transitions.append(Transition(last_features, last_action, None, reward))
@@ -105,7 +122,7 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
         avg_score = np.mean(self.scores[-100:]) if len(self.scores) >= 100 else np.mean(self.scores)
         avg_reward = np.mean(self.total_rewards[-100:]) if len(self.total_rewards) >= 100 else np.mean(self.total_rewards)
         self.logger.info(f"Game {self.game_counter}: Temperature {self.temperature:.4f}, Avg. score (last 100 games): {avg_score:.2f}, Avg. reward: {avg_reward:.2f}")
-        create_graphs(self)  # Use create_graphs(self) instead of self.create_graphs()
+        create_graphs(self)
 
     self.game_counter += 1
 
@@ -153,21 +170,22 @@ def reward_from_events(self, events: List[str], game_state: dict) -> float:
     """Translate game events into rewards."""
     game_rewards = {
         e.COIN_COLLECTED: 8,        # Increased reward to encourage collecting coins
-        e.KILLED_OPPONENT: 15,      # Increased reward for killing opponents
-        e.INVALID_ACTION: -2,       # Increased penalty for invalid actions
-        e.WAITED: -1,               # Increased penalty for waiting
-        e.KILLED_SELF: -20,         # Increased penalty for self-destruction
-        e.SURVIVED_ROUND: 1,        # Increased reward for survival
-        e.CRATE_DESTROYED: 3,       # Reward per crate destroyed
+        e.KILLED_OPPONENT: 15,
+        e.INVALID_ACTION: -2,
+        e.WAITED: -1,
+        e.KILLED_SELF: -20,
+        e.SURVIVED_ROUND: 1,
+        e.CRATE_DESTROYED: 5,       # Increased reward for destroying crates
         e.MOVED_DOWN: -0.05,
         e.MOVED_LEFT: -0.05,
         e.MOVED_RIGHT: -0.05,
         e.MOVED_UP: -0.05,
         e.BOMB_DROPPED: 0,          # Base reward for dropping bombs, adjusted below
-        e.GOT_KILLED: -5,           # Penalty for being killed
-        e.OPPONENT_ELIMINATED: 5,   # Reward for eliminating an opponent
-        'MOVED_TO_NEW_POSITION': 0.2,       # Small reward for exploring
-        'MOVED_TO_RECENT_POSITION': -2      # Penalty for revisiting recent positions
+        e.GOT_KILLED: -5,
+        e.OPPONENT_ELIMINATED: 5,
+        'MOVED_TO_NEW_POSITION': 0.2,
+        'MOVED_TO_RECENT_POSITION': -2,
+        'ESCAPED_BOMB': 5           # Reward for escaping from bomb blast
     }
 
     # Check for custom events
@@ -187,14 +205,19 @@ def reward_from_events(self, events: List[str], game_state: dict) -> float:
 
     # Adjust reward for BOMB_DROPPED
     if e.BOMB_DROPPED in events:
-        crates_destroyed = count_crates_destroyed(arena, x, y)
-        if crates_destroyed > 0:
-            # Positive reward proportional to potential crates destroyed
-            bomb_reward = crates_destroyed * 2  # Adjust coefficient as needed
-            game_rewards[e.BOMB_DROPPED] = bomb_reward
+        # Check if bomb placement is safe
+        escape_routes_after_bomb = get_escape_routes(arena, x, y, create_bomb_map(game_state))
+        if escape_routes_after_bomb == 0:
+            game_rewards[e.BOMB_DROPPED] = -5  # Penalty for unsafe bomb placement
         else:
-            # Negative reward for unnecessary bomb
-            game_rewards[e.BOMB_DROPPED] = -2
+            crates_destroyed = count_crates_destroyed(arena, x, y)
+            if crates_destroyed > 0:
+                # Positive reward proportional to potential crates destroyed
+                bomb_reward = crates_destroyed * 2  # Adjust coefficient as needed
+                game_rewards[e.BOMB_DROPPED] = bomb_reward
+            else:
+                # Negative reward for unnecessary bomb
+                game_rewards[e.BOMB_DROPPED] = -2
 
     # Additional penalties to prevent self-destructive behavior
     if 'MOVED_TO_RECENT_POSITION' in events:
@@ -221,8 +244,8 @@ def reward_from_events(self, events: List[str], game_state: dict) -> float:
         distance = abs(agent_x - bx) + abs(agent_y - by)  # Manhattan distance
         if distance <= blast_radius and t <= max_time:
             # Scale punishment by closeness and urgency
-            distance_scale = (blast_radius - distance + 1) / (blast_radius + 1)  # Closer distance -> higher punishment
-            time_scale = (max_time - t + 1) / (max_time + 1)  # Less time remaining -> higher punishment
+            distance_scale = (blast_radius - distance + 1) / (blast_radius + 1)
+            time_scale = (max_time - t + 1) / (max_time + 1)
             punishment += base_punishment * distance_scale * time_scale
 
     # Add the punishment to the total reward
@@ -232,3 +255,14 @@ def reward_from_events(self, events: List[str], game_state: dict) -> float:
     self.rewards_episode.append(reward)
 
     return reward
+
+def create_bomb_map(game_state):
+    """Create a bomb map similar to the one in state_to_features."""
+    arena = game_state['field']
+    bombs = game_state['bombs']
+    bomb_map = np.ones(arena.shape) * (s.BOMB_TIMER + 1)
+    for (bx, by), t in bombs:
+        for (i, j) in [(bx + h, by) for h in range(-s.BOMB_POWER, s.BOMB_POWER + 1)] + [(bx, by + h) for h in range(-s.BOMB_POWER, s.BOMB_POWER + 1)]:
+            if 0 <= i < arena.shape[0] and 0 <= j < arena.shape[1]:
+                bomb_map[i, j] = min(bomb_map[i, j], t)
+    return bomb_map
