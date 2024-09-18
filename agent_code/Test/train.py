@@ -12,7 +12,7 @@ import torch.optim as optim
 import events as e
 from .callbacks import (
     state_to_features, ACTIONS, create_graphs, count_crates_destroyed,
-    get_escape_routes  # Added get_escape_routes to the import
+    get_escape_routes  # Import get_escape_routes
 )
 from .config import (
     TRANSITION_HISTORY_SIZE, BATCH_SIZE, GAMMA, TARGET_UPDATE,
@@ -61,7 +61,7 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
         if bomb_map[old_pos] <= 3 and bomb_map[new_pos] > bomb_map[old_pos]:
             events.append('ESCAPED_BOMB')
 
-    reward = reward_from_events(self, events, new_game_state)
+    reward = self.reward_from_events(events, new_game_state)
 
     # Store transition in replay buffer
     if old_features is not None and new_features is not None:
@@ -70,7 +70,7 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
 
     # Optimize the model if we have enough samples
     if len(self.transitions) >= BATCH_SIZE:
-        loss = optimize_model(self)
+        loss = self.optimize_model()
         if loss is not None:
             self.losses.append(loss)
             self.logger.debug(f"Optimization done. Loss: {loss}")
@@ -91,14 +91,14 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
 
     # Final transition
     last_features = state_to_features(self, last_game_state)
-    reward = reward_from_events(self, events, last_game_state)
+    reward = self.reward_from_events(events, last_game_state)
     if last_features is not None:
         self.transitions.append(Transition(last_features, last_action, None, reward))
         self.logger.debug(f"Final transition stored. Buffer size: {len(self.transitions)}")
 
     # Perform final optimization step
     if len(self.transitions) >= BATCH_SIZE:
-        loss = optimize_model(self)
+        loss = self.optimize_model()
         if loss:
             self.losses.append(loss)
 
@@ -133,7 +133,7 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
     self.game_counter += 1
 
 def optimize_model(self):
-    """Perform a single optimization step with gradient clipping."""
+    """Perform a single optimization step."""
     if len(self.transitions) < BATCH_SIZE:
         return None
 
@@ -163,37 +163,32 @@ def optimize_model(self):
     # Optimize the model
     self.optimizer.zero_grad()
     loss.backward()
-
-    # Apply gradient clipping
-    max_grad_norm = 10
-    torch.nn.utils.clip_grad_norm_(self.q_network.parameters(), max_grad_norm)
-
     self.optimizer.step()
 
     return loss.item()
 
 def reward_from_events(self, events: List[str], game_state: dict) -> float:
-    """Translate game events into normalized rewards."""
-    # Scaled-down rewards
+    """Translate game events into rewards."""
     game_rewards = {
-        e.COIN_COLLECTED: 1.0,
-        e.KILLED_OPPONENT: 1.0,
-        e.INVALID_ACTION: -0.5,
-        e.WAITED: -0.1,
-        e.KILLED_SELF: -1.0,
-        e.SURVIVED_ROUND: 0.5,
-        e.CRATE_DESTROYED: 0.5,
-        e.BOMB_DROPPED: 0.0,
-        e.GOT_KILLED: -1.0,
-        'MOVED_TO_NEW_POSITION': 0.1,
-        'MOVED_TO_RECENT_POSITION': -0.1,
-        'ESCAPED_BOMB': 0.5,
-        'STAYED_IN_DANGER': -0.5,
-        'UNSAFE_BOMB_PLACEMENT': -0.5,
-        'REDUCED_DISTANCE_TO_COIN': 0.1,
-        'INCREASED_DISTANCE_TO_COIN': -0.1,
-        'REDUCED_DISTANCE_TO_ENEMY': 0.1,
-        'INCREASED_DISTANCE_TO_ENEMY': -0.1,
+        e.COIN_COLLECTED: 10,
+        e.KILLED_OPPONENT: 20,
+        e.INVALID_ACTION: -2,
+        e.WAITED: -1,
+        e.KILLED_SELF: -30,
+        e.SURVIVED_ROUND: 5,
+        e.CRATE_DESTROYED: 8,
+        e.BOMB_DROPPED: 0,  # Base reward, adjusted below
+        e.GOT_KILLED: -20,
+        e.OPPONENT_ELIMINATED: 10,
+        'MOVED_TO_NEW_POSITION': 0.5,
+        'MOVED_TO_RECENT_POSITION': -5,
+        'ESCAPED_BOMB': 10,
+        'STAYED_IN_DANGER': -5,
+        'UNSAFE_BOMB_PLACEMENT': -10,
+        'REDUCED_DISTANCE_TO_COIN': 1,
+        'INCREASED_DISTANCE_TO_COIN': -1,
+        'REDUCED_DISTANCE_TO_ENEMY': 1,
+        'INCREASED_DISTANCE_TO_ENEMY': -1,
     }
 
     # Position and state information
@@ -250,11 +245,11 @@ def reward_from_events(self, events: List[str], game_state: dict) -> float:
             crates_destroyed = count_crates_destroyed(arena, x, y)
             if crates_destroyed > 0:
                 # Positive reward proportional to potential crates destroyed
-                bomb_reward = crates_destroyed * 0.2  # Adjusted for normalized rewards
+                bomb_reward = crates_destroyed * 3
                 game_rewards[e.BOMB_DROPPED] = bomb_reward
             else:
                 # Negative reward for unnecessary bomb
-                game_rewards[e.BOMB_DROPPED] = -0.5
+                game_rewards[e.BOMB_DROPPED] = -5
 
     # Penalty for staying in danger
     bomb_map = create_bomb_map(game_state)
@@ -264,9 +259,6 @@ def reward_from_events(self, events: List[str], game_state: dict) -> float:
     # Compute the total reward
     reward = sum(game_rewards.get(event, 0) for event in events)
 
-    # Clip the reward to ensure it's within [-1, 1]
-    reward = max(min(reward, 1.0), -1.0)
-
     # Additional punishment for being close to bombs
     punishment = 0.0
     for bomb in game_state['bombs']:
@@ -275,12 +267,9 @@ def reward_from_events(self, events: List[str], game_state: dict) -> float:
         if distance <= s.BOMB_POWER and t <= s.BOMB_TIMER - 1:
             distance_scale = (s.BOMB_POWER - distance + 1) / (s.BOMB_POWER + 1)
             time_scale = (s.BOMB_TIMER - t) / s.BOMB_TIMER
-            punishment -= 0.1 * distance_scale * time_scale  # Adjusted for normalized rewards
+            punishment -= 0.5 * distance_scale * time_scale
 
     reward += punishment
-
-    # Clip the reward again after adding punishment
-    reward = max(min(reward, 1.0), -1.0)
 
     # Track rewards for logging
     self.rewards_episode.append(reward)
