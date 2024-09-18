@@ -152,11 +152,11 @@ def optimize_model(self):
 def reward_from_events(self, events: List[str], game_state: dict) -> float:
     """Translate game events into rewards."""
     game_rewards = {
-        e.COIN_COLLECTED: 7,        # Increased reward to encourage collecting coins
+        e.COIN_COLLECTED: 8,        # Increased reward to encourage collecting coins
         e.KILLED_OPPONENT: 15,      # Increased reward for killing opponents
         e.INVALID_ACTION: -2,       # Increased penalty for invalid actions
         e.WAITED: -1,               # Increased penalty for waiting
-        e.KILLED_SELF: -10,         # Increased penalty for self-destruction
+        e.KILLED_SELF: -20,         # Increased penalty for self-destruction
         e.SURVIVED_ROUND: 1,        # Increased reward for survival
         e.CRATE_DESTROYED: 3,       # Reward per crate destroyed
         e.MOVED_DOWN: -0.05,
@@ -205,10 +205,10 @@ def reward_from_events(self, events: List[str], game_state: dict) -> float:
     base_punishment = -0.5
 
     # Bomb blast radius
-    blast_radius = 3
+    blast_radius = s.BOMB_POWER
 
     # Maximum bomb timer to consider for scaling
-    max_time = 3
+    max_time = s.BOMB_TIMER - 1
 
     # Initialize punishment
     punishment = 0.0
