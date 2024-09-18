@@ -8,8 +8,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import events as e
-from .callbacks import state_to_features, ACTIONS, create_graphs, count_crates_destroyed  # Import count_crates_destroyed
-from .config import (TRANSITION_HISTORY_SIZE, BATCH_SIZE, GAMMA, TARGET_UPDATE, 
+from .callbacks import state_to_features, ACTIONS, create_graphs, count_crates_destroyed
+from .config import (TRANSITION_HISTORY_SIZE, BATCH_SIZE, GAMMA, TARGET_UPDATE,
                      LEARNING_RATE, TEMPERATURE_START, TEMPERATURE_END, TEMPERATURE_DECAY)
 
 # Transition tuple for storing experiences
@@ -29,7 +29,7 @@ def setup_training(self):
 
     # Initialize tracking metrics
     self.total_rewards = []
-    self.positions_visited = set()  # To track unique positions visited in an episode 
+    self.positions_visited = set()  # To track unique positions visited in an episode
     self.coordinate_history = deque([], 15)  # Track the last 15 positions
     self.rewards_episode = []
 
@@ -68,6 +68,27 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
     """Handle end of round logic."""
     self.logger.info(f"End of round. Events: {events}")
 
+    # Check if agent won the game
+    agent_won = False
+    agent_survived = e.SURVIVED_ROUND in events
+    agent_score = last_game_state['self'][1]
+    other_agents = last_game_state.get('others', [])
+
+    if len(other_agents) == 0:
+        # Single-player game
+        if len(last_game_state.get('coins', [])) == 0 and agent_survived:
+            agent_won = True
+    else:
+        # Multiplayer game
+        other_scores = [other_agent[1] for other_agent in other_agents]
+        max_other_score = max(other_scores)
+        if agent_score >= max_other_score and agent_survived:
+            agent_won = True
+
+    if agent_won:
+        events.append('GAME_WON')
+        self.logger.info("Agent has won the game!")
+
     # Final transition
     last_features = state_to_features(last_game_state)
     reward = reward_from_events(self, events, last_game_state)
@@ -85,8 +106,8 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
     try:
         torch.save(self.q_network.state_dict(), "dqn_model.pt")
         self.logger.info(f"Model saved after round {self.game_counter}")
-    except Exception as e:
-        self.logger.error(f"Error saving model: {e}")
+    except Exception as exc:
+        self.logger.error(f"Error saving model: {exc}")
 
     # Track game performance
     self.scores.append(last_game_state['self'][1])
@@ -105,7 +126,7 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
         avg_score = np.mean(self.scores[-100:]) if len(self.scores) >= 100 else np.mean(self.scores)
         avg_reward = np.mean(self.total_rewards[-100:]) if len(self.total_rewards) >= 100 else np.mean(self.total_rewards)
         self.logger.info(f"Game {self.game_counter}: Temperature {self.temperature:.4f}, Avg. score (last 100 games): {avg_score:.2f}, Avg. reward: {avg_reward:.2f}")
-        create_graphs(self)  # Use create_graphs(self) instead of self.create_graphs()
+        create_graphs(self)  # Use create_graphs(self)
 
     self.game_counter += 1
 
@@ -167,7 +188,8 @@ def reward_from_events(self, events: List[str], game_state: dict) -> float:
         e.GOT_KILLED: -5,           # Penalty for being killed
         e.OPPONENT_ELIMINATED: 5,   # Reward for eliminating an opponent
         'MOVED_TO_NEW_POSITION': 0.2,       # Small reward for exploring
-        'MOVED_TO_RECENT_POSITION': -2      # Penalty for revisiting recent positions
+        'MOVED_TO_RECENT_POSITION': -2,     # Penalty for revisiting recent positions
+        'GAME_WON': 500                      # Huge reward for winning the game
     }
 
     # Check for custom events

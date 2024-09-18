@@ -8,8 +8,7 @@ import matplotlib.pyplot as plt
 from collections import deque
 from .config import LEARNING_RATE, ACTIONS, TEMPERATURE_START  # Import necessary hyperparameters from config
 
-# Set up logging
-logging.basicConfig(filename='agent.log', level=logging.INFO)
+# Use the logger provided by the framework
 logger = logging.getLogger(__name__)
 
 # Neural Network for DQN
@@ -56,11 +55,11 @@ def setup(self):
             state_dict = torch.load("dqn_model.pt", map_location=self.device)
             self.q_network.load_state_dict(state_dict)
             self.target_network.load_state_dict(state_dict)
-            logger.info("DQN model loaded successfully.")
-        except Exception as e:
-            logger.error(f"Error loading model: {e}. Initializing new model.")
+            self.logger.info("DQN model loaded successfully.")
+        except Exception as exc:
+            self.logger.error(f"Error loading model: {exc}. Initializing new model.")
     else:
-        logger.info("No pre-trained model found, initializing new model.")
+        self.logger.info("No pre-trained model found, initializing new model.")
 
     self.q_network.eval()
     self.target_network.eval()
@@ -83,7 +82,7 @@ def act(self, game_state: dict) -> str:
     """Choose an action based on Q-values."""
     features = state_to_features(game_state)
     if features is None:
-        self.logger.debug(f"No features extracted, choosing a random action.")
+        self.logger.debug("No features extracted, choosing a random action.")
         return np.random.choice(ACTIONS)
 
     features = torch.from_numpy(features).float().unsqueeze(0).to(self.device)
@@ -321,7 +320,7 @@ def create_graphs(self):
     create_performance_graph(self)
     create_loss_graph(self)
     create_total_rewards_graph(self)
-    logger.info(f"Graphs created for game {self.game_counter}, Total steps: {self.total_training_steps}")
+    self.logger.info(f"Graphs created for game {self.game_counter}, Total steps: {self.total_training_steps}")
 
 def create_performance_graph(self):
     """Create and save performance graph."""
