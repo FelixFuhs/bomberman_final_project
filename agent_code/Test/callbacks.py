@@ -8,7 +8,7 @@ import torch.nn as nn
 import logging
 import matplotlib.pyplot as plt
 from collections import deque
-from .config import LEARNING_RATE, ACTIONS, TEMPERATURE_START  # Import necessary hyperparameters from config
+from .config import LEARNING_RATE, ACTIONS, TEMPERATURE_START
 import settings as s  # Import settings to access constants
 
 # Set up logging
@@ -83,6 +83,10 @@ def setup(self):
     self.total_rewards = []
     self.positions_visited = set()
     self.coordinate_history = deque([], 15)  # Track the last 15 positions
+
+    # Initialize distance tracking for coins and enemies
+    self.previous_coin_distance = None
+    self.previous_opponent_distance = None
 
 def act(self, game_state: dict) -> str:
     """Choose an action based on Q-values."""
@@ -350,7 +354,6 @@ def create_graphs(self):
     create_loss_graph(self)
     create_total_rewards_graph(self)
     logger.info(f"Graphs created for game {self.game_counter}, Total steps: {self.total_training_steps}")
-
 
 def create_performance_graph(self):
     """Create and save performance graph."""
