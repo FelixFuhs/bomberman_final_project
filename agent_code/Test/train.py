@@ -149,7 +149,7 @@ def optimize_model(self):
 
     return loss.item()
 
-def reward_from_events(self, events: List[str], game_state: dict) -> int:
+def reward_from_events(self, events: List[str], game_state: dict) -> float:
     """Translate game events into rewards."""
     game_rewards = {
         e.COIN_COLLECTED: 7,        # Increased reward to encourage collecting coins
@@ -200,8 +200,33 @@ def reward_from_events(self, events: List[str], game_state: dict) -> int:
     if 'MOVED_TO_RECENT_POSITION' in events:
         game_rewards['MOVED_TO_RECENT_POSITION'] = -2
 
-    # Calculate total reward
-    reward = sum(game_rewards.get(event, 0) for event in events)
+    # Custom Reward: Punish moving inside bomb blast radius
+    # Base punishment
+    base_punishment = -0.5
+
+    # Bomb blast radius
+    blast_radius = 3
+
+    # Maximum bomb timer to consider for scaling
+    max_time = 3
+
+    # Initialize punishment
+    punishment = 0.0
+
+    # Agent's position
+    agent_x, agent_y = x, y
+
+    for bomb in game_state['bombs']:
+        (bx, by), t = bomb
+        distance = abs(agent_x - bx) + abs(agent_y - by)  # Manhattan distance
+        if distance <= blast_radius and t <= max_time:
+            # Scale punishment by closeness and urgency
+            distance_scale = (blast_radius - distance + 1) / (blast_radius + 1)  # Closer distance -> higher punishment
+            time_scale = (max_time - t + 1) / (max_time + 1)  # Less time remaining -> higher punishment
+            punishment += base_punishment * distance_scale * time_scale
+
+    # Add the punishment to the total reward
+    reward = sum(game_rewards.get(event, 0) for event in events) + punishment
 
     # Track rewards for logging
     self.rewards_episode.append(reward)
