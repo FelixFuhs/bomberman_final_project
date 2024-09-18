@@ -1,5 +1,3 @@
-# callbacks.py
-
 import os
 import random
 import numpy as np
@@ -8,8 +6,7 @@ import torch.nn as nn
 import logging
 import matplotlib.pyplot as plt
 from collections import deque
-from .config import LEARNING_RATE, ACTIONS, TEMPERATURE_START
-import settings as s  # Import settings to access constants
+from .config import LEARNING_RATE, ACTIONS, TEMPERATURE_START  # Import necessary hyperparameters from config
 
 # Set up logging
 logging.basicConfig(filename='agent.log', level=logging.INFO)
@@ -20,13 +17,13 @@ class DQN(nn.Module):
     def __init__(self, input_size, output_size):
         super(DQN, self).__init__()
         # Neural network with increased capacity
-        self.fc1 = nn.Linear(input_size, 600)
-        self.fc2 = nn.Linear(600, 512)
-        self.fc3 = nn.Linear(512, 256)
-        self.fc4 = nn.Linear(256, 128)
-        self.fc5 = nn.Linear(128, 64)
-        self.fc6 = nn.Linear(64, 32)
-        self.fc7 = nn.Linear(32, output_size)
+        self.fc1 = nn.Linear(input_size, 600)   # First hidden layer with 600 neurons
+        self.fc2 = nn.Linear(600, 512)          # Second hidden layer with 512 neurons
+        self.fc3 = nn.Linear(512, 256)          # Third hidden layer with 256 neurons
+        self.fc4 = nn.Linear(256, 128)          # Fourth hidden layer with 128 neurons
+        self.fc5 = nn.Linear(128, 64)           # Fifth hidden layer with 64 neurons
+        self.fc6 = nn.Linear(64, 32)            # Sixth hidden layer with 32 neurons
+        self.fc7 = nn.Linear(32, output_size)   # Output layer
 
         # Initialize weights using Xavier initialization
         self.apply(self._init_weights)
@@ -48,10 +45,8 @@ class DQN(nn.Module):
         return self.fc7(x)  # Output layer without activation
 
 def setup(self):
-    """Initialize the agent."""
     self.device = "cpu"
-    # Adjust input_size based on the number of features
-    input_size = 32  # Adjusted to match the new feature vector size (30 original + 2 new features)
+    input_size = 30  # Adjusted to match the new feature vector size
 
     self.q_network = DQN(input_size, len(ACTIONS)).to(self.device)
     self.target_network = DQN(input_size, len(ACTIONS)).to(self.device)
@@ -84,13 +79,9 @@ def setup(self):
     self.positions_visited = set()
     self.coordinate_history = deque([], 15)  # Track the last 15 positions
 
-    # Initialize distance tracking for coins and enemies
-    self.previous_coin_distance = None
-    self.previous_opponent_distance = None
-
 def act(self, game_state: dict) -> str:
     """Choose an action based on Q-values."""
-    features = state_to_features(self, game_state)
+    features = state_to_features(game_state)
     if features is None:
         self.logger.debug(f"No features extracted, choosing a random action.")
         return np.random.choice(ACTIONS)
@@ -116,9 +107,9 @@ def act(self, game_state: dict) -> str:
     action = ACTIONS[action_index]
 
     # Track the current position
-    position = game_state['self'][3]
-    self.positions_visited.add(position)
-    self.coordinate_history.append(position)
+    self.positions_visited.add(game_state['self'][3])
+    # Add current position to the deque
+    self.coordinate_history.append(game_state['self'][3])
 
     self.logger.debug(f"Chosen Action: {action}")
     return action
@@ -142,7 +133,7 @@ def count_crates_destroyed(arena, x, y):
     """Count the number of crates that would be destroyed by placing a bomb at position (x, y)."""
     count = 0
     for dx, dy in [(1,0), (-1,0), (0,1), (0,-1)]:
-        for i in range(1, s.BOMB_POWER + 1):
+        for i in range(1, 4):
             nx, ny = x + dx*i, y + dy*i
             if 0 <= nx < arena.shape[0] and 0 <= ny < arena.shape[1]:
                 if arena[nx, ny] == -1:  # Wall
@@ -162,14 +153,11 @@ def get_escape_routes(arena, x, y, bomb_map):
     for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]:
         nx, ny = x + dx, y + dy
         if is_move_valid(nx, ny, {'field': arena, 'bombs': [], 'others': []}):
-            # Simulate bomb placement
-            future_bomb_map = bomb_map.copy()
-            future_bomb_map[x, y] = s.BOMB_TIMER  # Agent just placed a bomb
-            if future_bomb_map[nx, ny] > 0:
+            if bomb_map[nx, ny] > 0:
                 safe_directions += 1
     return safe_directions
 
-def state_to_features(self, game_state: dict) -> np.ndarray:
+def state_to_features(game_state: dict) -> np.ndarray:
     """Convert the game state into a feature vector."""
     if game_state is None:
         return None
@@ -181,17 +169,17 @@ def state_to_features(self, game_state: dict) -> np.ndarray:
     others = [xy for (_, _, _, xy) in game_state['others']]
 
     # Initialize bomb map
-    bomb_map = np.ones(arena.shape) * (s.BOMB_TIMER + 1)  # Set to max bomb timer + 1
+    bomb_map = np.ones(arena.shape) * 5  # Distance to the nearest bomb
     for (bx, by), t in bombs:
-        for (i, j) in [(bx + h, by) for h in range(-s.BOMB_POWER, s.BOMB_POWER + 1)] + [(bx, by + h) for h in range(-s.BOMB_POWER, s.BOMB_POWER + 1)]:
+        for (i, j) in [(bx + h, by) for h in range(-3, 4)] + [(bx, by + h) for h in range(-3, 4)]:
             if 0 <= i < arena.shape[0] and 0 <= j < arena.shape[1]:
                 bomb_map[i, j] = min(bomb_map[i, j], t)
 
     # Feature 1-4: Valid moves (UP, DOWN, LEFT, RIGHT)
-    valid_up = int(is_move_valid(x, y - 1, game_state))
-    valid_down = int(is_move_valid(x, y + 1, game_state))
-    valid_left = int(is_move_valid(x - 1, y, game_state))
-    valid_right = int(is_move_valid(x + 1, y, game_state))
+    valid_up = is_move_valid(x, y - 1, game_state)
+    valid_down = is_move_valid(x, y + 1, game_state)
+    valid_left = is_move_valid(x - 1, y, game_state)
+    valid_right = is_move_valid(x + 1, y, game_state)
 
     # Feature 5: Bomb availability (binary feature)
     bomb_available = int(game_state['self'][2])  # 1 if the agent can place a bomb, 0 otherwise
@@ -200,8 +188,9 @@ def state_to_features(self, game_state: dict) -> np.ndarray:
     if coins:
         distances = [(cx - x, cy - y) for (cx, cy) in coins]
         nearest_coin_dx, nearest_coin_dy = min(distances, key=lambda d: abs(d[0]) + abs(d[1]))
-        nearest_coin_dx /= (arena.shape[0] - 1)
-        nearest_coin_dy /= (arena.shape[1] - 1)
+        max_distance = arena.shape[0] + arena.shape[1]
+        nearest_coin_dx /= max_distance
+        nearest_coin_dy /= max_distance
     else:
         nearest_coin_dx = 0  # No coins left
         nearest_coin_dy = 0  # No coins left
@@ -212,31 +201,28 @@ def state_to_features(self, game_state: dict) -> np.ndarray:
     # Feature 9: Proximity to nearest opponent (normalized)
     if others:
         opponent_distances = [abs(x - ox) + abs(y - oy) for (ox, oy) in others]
-        nearest_opponent_dist = min(opponent_distances) / (arena.shape[0] + arena.shape[1] - 2)
+        nearest_opponent_dist = min(opponent_distances) / (arena.shape[0] + arena.shape[1])
     else:
         nearest_opponent_dist = -1  # No opponents
 
     # Feature 10: Proximity to bombs (normalized)
     if bombs:
         bomb_dists = [abs(x - bx) + abs(y - by) for (bx, by), _ in bombs]
-        nearest_bomb_dist = min(bomb_dists) / (arena.shape[0] + arena.shape[1] - 2)
+        nearest_bomb_dist = min(bomb_dists) / (arena.shape[0] + arena.shape[1])
     else:
         nearest_bomb_dist = -1  # No bombs
 
     # Feature 11: In a dead end (binary feature)
-    def impassable(nx, ny):
-        if nx < 0 or nx >= arena.shape[0] or ny < 0 or ny >= arena.shape[1]:
-            return True
-        return arena[nx, ny] != 0 or any((bx, by) == (nx, ny) for (bx, by), _ in bombs) or any((ox, oy) == (nx, ny) for (ox, oy) in others)
-    dead_end = int(sum([impassable(x + dx, y + dy) for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]]) >= 3)
+    walls = [arena[x + dx, y + dy] == -1 for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1)]]
+    dead_end = int(sum(walls) >= 3)
 
     # Feature 12: Number of adjacent crates (normalized)
     adjacent_crates = sum(
-        [arena[x + dx, y + dy] == 1 for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)] if 0 <= x + dx < arena.shape[0] and 0 <= y + dy < arena.shape[1]]
+        [arena[x + dx, y + dy] == 1 for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1)]]
     ) / 4  # Normalize by maximum possible adjacent crates
 
     # Feature 13: Normalized step count (current step / max steps)
-    normalized_step = game_state['step'] / s.MAX_STEPS
+    normalized_step = game_state['step'] / 400
 
     # Feature 14: Bias feature (constant value)
     bias_feature = 1  # A constant feature to help the network learn bias
@@ -251,31 +237,34 @@ def state_to_features(self, game_state: dict) -> np.ndarray:
 
     # Feature 17: Is agent adjacent to a bomb about to explode (binary)
     adjacent_positions = [(x + dx, y + dy) for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]]
-    adjacent_bomb = int(any(0 < bomb_map[pos] <= 3 for pos in adjacent_positions if 0 <= pos[0] < arena.shape[0] and 0 <= pos[1] < arena.shape[1]))
+    adjacent_bomb = int(any(bomb_map[pos] <= 3 for pos in adjacent_positions if 0 <= pos[0] < arena.shape[0] and 0 <= pos[1] < arena.shape[1]))
 
     # Feature 18: Time until explosion at agent's position (normalized)
-    time_until_explosion = bomb_map[x, y] / (s.BOMB_TIMER + 1)
+    time_until_explosion = bomb_map[x, y] / 5.0  # Normalize by maximum bomb timer
 
     # Feature 19: Is agent adjacent to an opponent (binary)
     adjacent_opponent = int(any(pos in others for pos in adjacent_positions))
 
     # Feature 20-21: Agent's own position (normalized)
-    agent_pos_x = x / (arena.shape[0] - 1)
-    agent_pos_y = y / (arena.shape[1] - 1)
+    agent_pos_x = x / arena.shape[0]
+    agent_pos_y = y / arena.shape[1]
 
     # Feature 22-23: Nearest crate delta x and delta y (normalized)
     crates = np.argwhere(arena == 1)
     if crates.size > 0:
         distances = [(cx - x, cy - y) for (cx, cy) in crates]
         nearest_crate_dx, nearest_crate_dy = min(distances, key=lambda d: abs(d[0]) + abs(d[1]))
-        nearest_crate_dx /= (arena.shape[0] - 1)
-        nearest_crate_dy /= (arena.shape[1] - 1)
+        max_distance = arena.shape[0] + arena.shape[1]
+        nearest_crate_dx /= max_distance
+        nearest_crate_dy /= max_distance
     else:
         nearest_crate_dx = 0  # No crates left
         nearest_crate_dy = 0  # No crates left
 
     # Feature 24: Number of crates that would be destroyed by placing a bomb at current position (normalized)
     potential_crates_destroyed = count_crates_destroyed(arena, x, y) / 4.0  # Normalize by max possible (4 crates)
+
+    # New Features for Task 2
 
     # Feature 25: Escape routes after bomb placement (normalized)
     escape_routes = get_escape_routes(arena, x, y, bomb_map) / 4.0  # Normalize by max possible (4 directions)
@@ -287,17 +276,16 @@ def state_to_features(self, game_state: dict) -> np.ndarray:
     crates_in_bomb_range = potential_crates_destroyed  # Already normalized
 
     # Feature 28: Distance to nearest safe tile (normalized)
+    # Using BFS to find nearest safe tile not in bomb blast radius
     from collections import deque
     visited = set()
     queue = deque()
     queue.append((x, y, 0))
-    found_safe_tile = False
-    nearest_safe_distance = arena.shape[0] + arena.shape[1] - 2  # Max possible distance
+    nearest_safe_distance = arena.shape[0] + arena.shape[1]  # Max possible distance
     while queue:
         cx, cy, dist = queue.popleft()
-        if bomb_map[cx, cy] > 0 and (cx, cy) != (x, y):
+        if bomb_map[cx, cy] > 0:
             nearest_safe_distance = dist
-            found_safe_tile = True
             break
         for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]:
             nx, ny = cx + dx, cy + dy
@@ -305,24 +293,15 @@ def state_to_features(self, game_state: dict) -> np.ndarray:
                 if (nx, ny) not in visited and arena[nx, ny] == 0:
                     visited.add((nx, ny))
                     queue.append((nx, ny, dist + 1))
-    if not found_safe_tile:
-        nearest_safe_distance = arena.shape[0] + arena.shape[1] - 2  # Max possible distance
-    distance_to_nearest_safe_tile = nearest_safe_distance / (arena.shape[0] + arena.shape[1] - 2)  # Normalize
+    distance_to_nearest_safe_tile = nearest_safe_distance / (arena.shape[0] + arena.shape[1])  # Normalize
 
     # Feature 29: Bomb threat level at current position (normalized)
-    bomb_threat_level = ((s.BOMB_TIMER + 1) - bomb_map[x, y]) / (s.BOMB_TIMER + 1)  # Higher value means more urgent threat
+    bomb_threat_level = (5.0 - bomb_map[x, y]) / 5.0  # Higher value means more urgent threat
 
     # Feature 30: Is agent in bomb blast zone (binary)
     is_in_bomb_blast_zone = int(bomb_map[x, y] <= 3)
 
-    # New Features
-
-    # Feature 31: Escape routes before bomb placement (normalized)
-    escape_routes_before_bomb = get_escape_routes_before_bomb(arena, x, y) / 4.0  # Normalize
-
-    # Feature 32: Loop detection (binary feature)
-    loop_detected = int(self.coordinate_history.count((x, y)) > 2)
-
+    # Combine all features into a single feature vector
     features = [
         valid_up, valid_down, valid_left, valid_right,
         bomb_available, nearest_coin_dx, nearest_coin_dy,
@@ -332,21 +311,10 @@ def state_to_features(self, game_state: dict) -> np.ndarray:
         time_until_explosion, adjacent_opponent, agent_pos_x, agent_pos_y,
         nearest_crate_dx, nearest_crate_dy, potential_crates_destroyed,
         escape_routes, is_bomb_placement_safe, crates_in_bomb_range,
-        distance_to_nearest_safe_tile, bomb_threat_level, is_in_bomb_blast_zone,
-        escape_routes_before_bomb, loop_detected
+        distance_to_nearest_safe_tile, bomb_threat_level, is_in_bomb_blast_zone  # New features added here
     ]
 
     return np.array(features, dtype=np.float32)
-
-def get_escape_routes_before_bomb(arena, x, y):
-    """Calculate the number of escape routes before placing a bomb."""
-    safe_directions = 0
-    for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]:
-        nx, ny = x + dx, y + dy
-        if 0 <= nx < arena.shape[0] and 0 <= ny < arena.shape[1]:
-            if arena[nx, ny] == 0:
-                safe_directions += 1
-    return safe_directions
 
 def create_graphs(self):
     """Generate and save performance and loss graphs."""
