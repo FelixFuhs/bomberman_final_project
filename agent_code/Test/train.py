@@ -61,7 +61,7 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
         if bomb_map[old_pos] <= 3 and bomb_map[new_pos] > bomb_map[old_pos]:
             events.append('ESCAPED_BOMB')
 
-    reward = self.reward_from_events(events, new_game_state)
+    reward = reward_from_events(self, events, new_game_state)
 
     # Store transition in replay buffer
     if old_features is not None and new_features is not None:
@@ -70,7 +70,7 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
 
     # Optimize the model if we have enough samples
     if len(self.transitions) >= BATCH_SIZE:
-        loss = self.optimize_model()
+        loss = optimize_model(self)
         if loss is not None:
             self.losses.append(loss)
             self.logger.debug(f"Optimization done. Loss: {loss}")
@@ -91,14 +91,14 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
 
     # Final transition
     last_features = state_to_features(self, last_game_state)
-    reward = self.reward_from_events(events, last_game_state)
+    reward = reward_from_events(self, events, last_game_state)
     if last_features is not None:
         self.transitions.append(Transition(last_features, last_action, None, reward))
         self.logger.debug(f"Final transition stored. Buffer size: {len(self.transitions)}")
 
     # Perform final optimization step
     if len(self.transitions) >= BATCH_SIZE:
-        loss = self.optimize_model()
+        loss = optimize_model(self)
         if loss:
             self.losses.append(loss)
 
