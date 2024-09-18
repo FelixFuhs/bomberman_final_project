@@ -158,7 +158,7 @@ def reward_from_events(self, events: List[str], game_state: dict) -> int:
         e.WAITED: -1,               # Increased penalty for waiting
         e.KILLED_SELF: -10,         # Increased penalty for self-destruction
         e.SURVIVED_ROUND: 1,        # Increased reward for survival
-        e.CRATE_DESTROYED: 2,       # Reward per crate destroyed
+        e.CRATE_DESTROYED: 3,       # Reward per crate destroyed
         e.MOVED_DOWN: -0.05,
         e.MOVED_LEFT: -0.05,
         e.MOVED_RIGHT: -0.05,
@@ -167,7 +167,7 @@ def reward_from_events(self, events: List[str], game_state: dict) -> int:
         e.GOT_KILLED: -5,           # Penalty for being killed
         e.OPPONENT_ELIMINATED: 5,   # Reward for eliminating an opponent
         'MOVED_TO_NEW_POSITION': 0.2,       # Small reward for exploring
-        'MOVED_TO_RECENT_POSITION': -1.5      # Penalty for revisiting recent positions
+        'MOVED_TO_RECENT_POSITION': -2      # Penalty for revisiting recent positions
     }
 
     # Check for custom events
@@ -198,7 +198,7 @@ def reward_from_events(self, events: List[str], game_state: dict) -> int:
 
     # Additional penalties to prevent self-destructive behavior
     if 'MOVED_TO_RECENT_POSITION' in events:
-        game_rewards['MOVED_TO_RECENT_POSITION'] = -1.5
+        game_rewards['MOVED_TO_RECENT_POSITION'] = -2
 
     # Calculate total reward
     reward = sum(game_rewards.get(event, 0) for event in events)
