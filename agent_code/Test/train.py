@@ -20,7 +20,7 @@ def setup_training(self):
     self.transitions = deque(maxlen=TRANSITION_HISTORY_SIZE)
     self.temperature = TEMPERATURE_START  # Initialize temperature
     self.optimizer = optim.Adam(self.q_network.parameters(), lr=LEARNING_RATE)
-    self.criterion = nn.MSELoss()
+    self.criterion = nn.SmoothL1Loss()  # Changed to Huber Loss for stability
     self.total_training_steps = 0
     self.losses = []
     self.scores = []
@@ -128,7 +128,7 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
                 self.logger.info(f"Agent '{agent_name}' has won the game by reaching the highest score first among surviving agents.")
             else:
                 self.logger.info(f"Agent '{agent_name}' did not win. Winner is '{winner[0]}'.")
-
+    
     if agent_won:
         events.append('GAME_WON')
         self.logger.info("Agent has won the game!")
@@ -177,8 +177,6 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
     # Reset agent score steps for the next round
     self.agent_score_steps = {}
 
-
-
 def optimize_model(self):
     """Perform a single optimization step."""
     if len(self.transitions) < BATCH_SIZE:
@@ -198,18 +196,19 @@ def optimize_model(self):
     action_batch = torch.tensor([ACTIONS.index(a) for a in batch.action], device=self.device, dtype=torch.long).unsqueeze(1)
     reward_batch = torch.tensor(batch.reward, device=self.device, dtype=torch.float32)
 
-    # Compute Q(s, a)
+    # Compute Q(s, a) using the main network
     state_action_values = self.q_network(state_batch).gather(1, action_batch)
 
-    # Compute Q(s', a') for non-final states
+    # Compute Q(s', a') for non-final states using Double DQN
+    next_state_actions = self.q_network(non_final_next_states).max(1)[1].unsqueeze(1)
     next_state_values = torch.zeros(BATCH_SIZE, device=self.device)
     with torch.no_grad():
-        next_state_values[non_final_mask] = self.target_network(non_final_next_states).max(1)[0]
+        next_state_values[non_final_mask] = self.target_network(non_final_next_states).gather(1, next_state_actions).squeeze()
 
     # Compute expected Q values
     expected_state_action_values = (next_state_values * GAMMA) + reward_batch
 
-    # Compute loss
+    # Compute loss using Huber loss
     loss = self.criterion(state_action_values, expected_state_action_values.unsqueeze(1))
 
     # Optimize the model
@@ -220,27 +219,27 @@ def optimize_model(self):
     return loss.item()
 
 def reward_from_events(self, events: List[str], game_state: dict) -> float:
-    """Translate game events into rewards."""
+    """Translate game events into scaled rewards."""
     self.logger.debug(f"Events received for reward calculation: {events}")
 
     game_rewards = {
         e.COIN_COLLECTED: 10,        # Increased reward to encourage collecting coins
-        e.KILLED_OPPONENT: 15,      # Increased reward for killing opponents
-        e.INVALID_ACTION: -5,       # Increased penalty for invalid actions
-        e.WAITED: -1,               # Increased penalty for waiting
-        e.KILLED_SELF: -50,         # Increased penalty for self-destruction
-        e.SURVIVED_ROUND: 2,       # Increased reward for survival
-        e.CRATE_DESTROYED: 2,       # Reward per crate destroyed
+        e.KILLED_OPPONENT: 15,        # Increased reward for killing opponents
+        e.INVALID_ACTION: -5,         # Increased penalty for invalid actions
+        e.WAITED: -1,                 # Increased penalty for waiting
+        e.KILLED_SELF: -50,           # Increased penalty for self-destruction
+        e.SURVIVED_ROUND: 2,          # Increased reward for survival
+        e.CRATE_DESTROYED: 2,         # Reward per crate destroyed
         e.MOVED_DOWN: -0.15,
         e.MOVED_LEFT: -0.15,
         e.MOVED_RIGHT: -0.15,
         e.MOVED_UP: -0.15,
-        e.BOMB_DROPPED: 0,          # Base reward for dropping bombs, adjusted below
-        e.GOT_KILLED: -5,          # Penalty for being killed
-        e.OPPONENT_ELIMINATED: 5,   # Reward for eliminating an opponent
-        'MOVED_TO_NEW_POSITION': 0.5,       # Small reward for exploring
-        'MOVED_TO_RECENT_POSITION': -2,     # Penalty for revisiting recent positions
-        'GAME_WON': 500                      # Huge reward for winning the game
+        e.BOMB_DROPPED: 0,            # Base reward for dropping bombs, adjusted below
+        e.GOT_KILLED: -5,             # Penalty for being killed
+        e.OPPONENT_ELIMINATED: 5,     # Reward for eliminating an opponent
+        'MOVED_TO_NEW_POSITION': 0.5,        # Small reward for exploring
+        'MOVED_TO_RECENT_POSITION': -2,      # Penalty for revisiting recent positions
+        'GAME_WON': 500                        # Huge reward for winning the game
     }
 
     # Check for custom events
@@ -295,14 +294,18 @@ def reward_from_events(self, events: List[str], game_state: dict) -> float:
         if distance <= blast_radius and t <= max_time:
             # Scale punishment by closeness and urgency
             distance_scale = (blast_radius - distance + 1) / (blast_radius + 1)  # Closer distance -> higher punishment
-            time_scale = (max_time - t + 1) / (max_time + 1)  # Less time remaining -> higher punishment
+            time_scale = (max_time - t + 1) / (max_time + 1)              # Less time remaining -> higher punishment
             punishment += base_punishment * distance_scale * time_scale
 
-    # Add the punishment to the total reward
+    # Compute total reward
     reward = sum(game_rewards.get(event, 0) for event in events) + punishment
+
+    # Scale the total reward
+    scaling_factor = 0.1
+    reward *= scaling_factor
 
     # Track rewards for logging
     self.rewards_episode.append(reward)
-    self.logger.debug(f"Calculated reward: {reward}")
+    self.logger.debug(f"Calculated scaled reward: {reward}")
 
     return reward

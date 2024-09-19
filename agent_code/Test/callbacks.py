@@ -11,17 +11,23 @@ from .config import LEARNING_RATE, ACTIONS, TEMPERATURE_START  # Import necessar
 # Use the logger provided by the framework
 logger = logging.getLogger(__name__)
 
-# Neural Network for DQN
+# Neural Network for DQN with Batch Normalization
 class DQN(nn.Module):
     def __init__(self, input_size, output_size):
         super(DQN, self).__init__()
-        # Neural network with increased capacity
+        # Neural network with increased capacity and Batch Normalization
         self.fc1 = nn.Linear(input_size, 600)   # First hidden layer with 600 neurons
+        self.bn1 = nn.BatchNorm1d(600)          # BatchNorm for first layer
         self.fc2 = nn.Linear(600, 512)          # Second hidden layer with 512 neurons
+        self.bn2 = nn.BatchNorm1d(512)          # BatchNorm for second layer
         self.fc3 = nn.Linear(512, 256)          # Third hidden layer with 256 neurons
+        self.bn3 = nn.BatchNorm1d(256)          # BatchNorm for third layer
         self.fc4 = nn.Linear(256, 128)          # Fourth hidden layer with 128 neurons
+        self.bn4 = nn.BatchNorm1d(128)          # BatchNorm for fourth layer
         self.fc5 = nn.Linear(128, 64)           # Fifth hidden layer with 64 neurons
+        self.bn5 = nn.BatchNorm1d(64)           # BatchNorm for fifth layer
         self.fc6 = nn.Linear(64, 32)            # Sixth hidden layer with 32 neurons
+        self.bn6 = nn.BatchNorm1d(32)           # BatchNorm for sixth layer
         self.fc7 = nn.Linear(32, output_size)   # Output layer
 
         # Initialize weights using Xavier initialization
@@ -34,13 +40,25 @@ class DQN(nn.Module):
                 nn.init.constant_(module.bias, 0)
 
     def forward(self, x):
-        # Pass data through the network with ReLU activations
-        x = torch.relu(self.fc1(x))
-        x = torch.relu(self.fc2(x))
-        x = torch.relu(self.fc3(x))
-        x = torch.relu(self.fc4(x))
-        x = torch.relu(self.fc5(x))
-        x = torch.relu(self.fc6(x))
+        # Pass data through the network with ReLU activations and BatchNorm
+        x = self.fc1(x)
+        x = self.bn1(x)
+        x = torch.relu(x)
+        x = self.fc2(x)
+        x = self.bn2(x)
+        x = torch.relu(x)
+        x = self.fc3(x)
+        x = self.bn3(x)
+        x = torch.relu(x)
+        x = self.fc4(x)
+        x = self.bn4(x)
+        x = torch.relu(x)
+        x = self.fc5(x)
+        x = self.bn5(x)
+        x = torch.relu(x)
+        x = self.fc6(x)
+        x = self.bn6(x)
+        x = torch.relu(x)
         return self.fc7(x)  # Output layer without activation
 
 def setup(self):
@@ -90,6 +108,7 @@ def act(self, game_state: dict) -> str:
     with torch.no_grad():
         q_values = self.q_network(features).squeeze()
         self.logger.debug(f"Q-values: {q_values.tolist()}")  # Log Q-values
+        self.logger.debug(f"Q-values stats - Mean: {q_values.mean().item()}, Max: {q_values.max().item()}, Min: {q_values.min().item()}")  # Log stats
 
     if self.train:
         # Subtract max Q-value to prevent numerical instability in softmax
