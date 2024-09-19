@@ -224,13 +224,13 @@ def reward_from_events(self, events: List[str], game_state: dict) -> float:
     self.logger.debug(f"Events received for reward calculation: {events}")
 
     game_rewards = {
-        e.COIN_COLLECTED: 7,        # Increased reward to encourage collecting coins
+        e.COIN_COLLECTED: 10,        # Increased reward to encourage collecting coins
         e.KILLED_OPPONENT: 15,      # Increased reward for killing opponents
-        e.INVALID_ACTION: -2,       # Increased penalty for invalid actions
+        e.INVALID_ACTION: -5,       # Increased penalty for invalid actions
         e.WAITED: -1,               # Increased penalty for waiting
-        e.KILLED_SELF: -5,         # Increased penalty for self-destruction
+        e.KILLED_SELF: -50,         # Increased penalty for self-destruction
         e.SURVIVED_ROUND: 2,       # Increased reward for survival
-        e.CRATE_DESTROYED: 3,       # Reward per crate destroyed
+        e.CRATE_DESTROYED: 2,       # Reward per crate destroyed
         e.MOVED_DOWN: -0.15,
         e.MOVED_LEFT: -0.15,
         e.MOVED_RIGHT: -0.15,
@@ -238,7 +238,7 @@ def reward_from_events(self, events: List[str], game_state: dict) -> float:
         e.BOMB_DROPPED: 0,          # Base reward for dropping bombs, adjusted below
         e.GOT_KILLED: -5,          # Penalty for being killed
         e.OPPONENT_ELIMINATED: 5,   # Reward for eliminating an opponent
-        'MOVED_TO_NEW_POSITION': 0.2,       # Small reward for exploring
+        'MOVED_TO_NEW_POSITION': 0.5,       # Small reward for exploring
         'MOVED_TO_RECENT_POSITION': -2,     # Penalty for revisiting recent positions
         'GAME_WON': 500                      # Huge reward for winning the game
     }
@@ -275,7 +275,7 @@ def reward_from_events(self, events: List[str], game_state: dict) -> float:
 
     # Custom Reward: Punish moving inside bomb blast radius
     # Base punishment
-    base_punishment = -0.5
+    base_punishment = -1
 
     # Bomb blast radius
     blast_radius = 3
