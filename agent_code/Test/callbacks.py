@@ -1,3 +1,5 @@
+# callbacks.py
+
 import os
 import random
 import numpy as np
@@ -62,7 +64,18 @@ class DQN(nn.Module):
         return self.fc7(x)  # Output layer without activation
 
 def setup(self):
-    self.device = "cpu"
+    """Setup function to initialize networks and device."""
+    # Detect and set the device
+    if torch.cuda.is_available():
+        self.device = torch.device("cuda")
+        device_name = f"GPU ({torch.cuda.get_device_name(self.device)})"
+    else:
+        self.device = torch.device("cpu")
+        device_name = "CPU"
+
+    print(f"Using device: {device_name}")  # Print statement to verify device
+    self.logger.info(f"Model is using device: {device_name}")
+
     input_size = 30  # Adjusted to match the new feature vector size
 
     self.q_network = DQN(input_size, len(ACTIONS)).to(self.device)

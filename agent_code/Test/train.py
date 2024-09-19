@@ -1,3 +1,5 @@
+# train.py
+
 import os
 import random
 from collections import namedtuple, deque
@@ -20,7 +22,7 @@ def setup_training(self):
     self.transitions = deque(maxlen=TRANSITION_HISTORY_SIZE)
     self.temperature = TEMPERATURE_START  # Initialize temperature
     self.optimizer = optim.Adam(self.q_network.parameters(), lr=LEARNING_RATE)
-    self.criterion = nn.SmoothL1Loss()  # Changed to Huber Loss for stability
+    self.criterion = nn.SmoothL1Loss().to(self.device)  # Move criterion to device
     self.total_training_steps = 0
     self.losses = []
     self.scores = []
@@ -200,9 +202,9 @@ def optimize_model(self):
     state_action_values = self.q_network(state_batch).gather(1, action_batch)
 
     # Compute Q(s', a') for non-final states using Double DQN
-    next_state_actions = self.q_network(non_final_next_states).max(1)[1].unsqueeze(1)
-    next_state_values = torch.zeros(BATCH_SIZE, device=self.device)
     with torch.no_grad():
+        next_state_actions = self.q_network(non_final_next_states).max(1)[1].unsqueeze(1)
+        next_state_values = torch.zeros(BATCH_SIZE, device=self.device)
         next_state_values[non_final_mask] = self.target_network(non_final_next_states).gather(1, next_state_actions).squeeze()
 
     # Compute expected Q values
@@ -280,7 +282,7 @@ def reward_from_events(self, events: List[str], game_state: dict) -> float:
     blast_radius = 3
 
     # Maximum bomb timer to consider for scaling
-    max_time = 3
+    max_time = 4
 
     # Initialize punishment
     punishment = 0.0
