@@ -65,25 +65,69 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
     self.total_training_steps += 1
 
 def end_of_round(self, last_game_state: dict, last_action: str, events: List[str]):
-    """Handle end of round logic."""
     self.logger.info(f"End of round. Events: {events}")
 
-    # Check if agent won the game
+    # Initialize variables
     agent_won = False
-    agent_survived = e.SURVIVED_ROUND in events
-    agent_score = last_game_state['self'][1]
-    other_agents = last_game_state.get('others', [])
 
-    if len(other_agents) == 0:
-        # Single-player game
-        if len(last_game_state.get('coins', [])) == 0 and agent_survived:
-            agent_won = True
+    # Check if the agent survived
+    agent_survived = e.KILLED_SELF not in events and e.GOT_KILLED not in events
+    self.logger.info(f"Agent survived: {agent_survived}")
+
+    # Extract agent's name and score
+    agent_name = last_game_state['self'][0]
+    agent_score = last_game_state['self'][1]
+    agent_step = last_game_state['step']  # Assuming step count is available
+
+    self.logger.info(f"Agent '{agent_name}' score: {agent_score}")
+
+    other_agents = last_game_state.get('others', [])
+    self.logger.info(f"Other agents: {other_agents}")
+
+    # Collect scores and steps of all agents, along with survival status
+    all_agents = [(agent_name, agent_score, agent_step, agent_survived)]  # Include our agent
+
+    for other_agent in other_agents:
+        other_agent_name = other_agent[0]
+        other_agent_score = other_agent[1]
+        other_agent_step = last_game_state.get('agent_steps', {}).get(other_agent_name, last_game_state['step'])
+        other_agent_alive = other_agent[3] != (-1, -1)  # Assuming dead agents have position (-1, -1)
+        all_agents.append((other_agent_name, other_agent_score, other_agent_step, other_agent_alive))
+        self.logger.info(f"Other agent '{other_agent_name}' score: {other_agent_score}, step reached: {other_agent_step}, alive: {other_agent_alive}")
+
+    # Filter out agents who are dead
+    surviving_agents = [agent for agent in all_agents if agent[3]]  # Only include alive agents
+
+    if not surviving_agents:
+        # No agents survived, no winner
+        self.logger.info("No agents survived. No winner.")
     else:
-        # Multiplayer game
-        other_scores = [other_agent[1] for other_agent in other_agents]
-        max_other_score = max(other_scores)
-        if agent_score >= max_other_score and agent_survived:
-            agent_won = True
+        # Determine the agent with the highest score among surviving agents
+        max_score = max(score for _, score, _, _ in surviving_agents)
+        agents_with_max_score = [agent for agent in surviving_agents if agent[1] == max_score]
+
+        self.logger.info(f"Surviving agents with max score {max_score}: {agents_with_max_score}")
+
+        if len(agents_with_max_score) == 1:
+            # Only one agent has the highest score among surviving agents
+            winner = agents_with_max_score[0]
+            if winner[0] == agent_name:
+                agent_won = True
+                self.logger.info(f"Agent '{agent_name}' has won the game with the highest score among surviving agents.")
+            else:
+                self.logger.info(f"Agent '{agent_name}' did not win. Winner is '{winner[0]}'.")
+        else:
+            # Tie situation among surviving agents: Agent who reached the score first wins
+            earliest_step = min(step for _, _, step, _ in agents_with_max_score)
+            winners = [agent for agent in agents_with_max_score if agent[2] == earliest_step]
+            winner = winners[0]  # Assuming there's only one agent who reached the earliest step
+            self.logger.info(f"Tie detected among surviving agents. Agent(s) who reached the score first: {winners}")
+
+            if winner[0] == agent_name:
+                agent_won = True
+                self.logger.info(f"Agent '{agent_name}' has won the game by reaching the highest score first among surviving agents.")
+            else:
+                self.logger.info(f"Agent '{agent_name}' did not win. Winner is '{winner[0]}'.")
 
     if agent_won:
         events.append('GAME_WON')
@@ -94,7 +138,7 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
     reward = reward_from_events(self, events, last_game_state)
     if last_features is not None:
         self.transitions.append(Transition(last_features, last_action, None, reward))
-        self.logger.debug(f"Final transition stored. Buffer size: {len(self.transitions)}")
+        self.logger.debug(f"Final transition stored with reward {reward}. Buffer size: {len(self.transitions)}")
 
     # Perform final optimization step
     if len(self.transitions) >= BATCH_SIZE:
@@ -110,7 +154,7 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
         self.logger.error(f"Error saving model: {exc}")
 
     # Track game performance
-    self.scores.append(last_game_state['self'][1])
+    self.scores.append(agent_score)
 
     # Track total rewards
     total_reward = sum(self.rewards_episode)
@@ -126,9 +170,14 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
         avg_score = np.mean(self.scores[-100:]) if len(self.scores) >= 100 else np.mean(self.scores)
         avg_reward = np.mean(self.total_rewards[-100:]) if len(self.total_rewards) >= 100 else np.mean(self.total_rewards)
         self.logger.info(f"Game {self.game_counter}: Temperature {self.temperature:.4f}, Avg. score (last 100 games): {avg_score:.2f}, Avg. reward: {avg_reward:.2f}")
-        create_graphs(self)  # Use create_graphs(self)
+        create_graphs(self)
 
     self.game_counter += 1
+
+    # Reset agent score steps for the next round
+    self.agent_score_steps = {}
+
+
 
 def optimize_model(self):
     """Perform a single optimization step."""
@@ -172,20 +221,22 @@ def optimize_model(self):
 
 def reward_from_events(self, events: List[str], game_state: dict) -> float:
     """Translate game events into rewards."""
+    self.logger.debug(f"Events received for reward calculation: {events}")
+
     game_rewards = {
         e.COIN_COLLECTED: 7,        # Increased reward to encourage collecting coins
         e.KILLED_OPPONENT: 15,      # Increased reward for killing opponents
         e.INVALID_ACTION: -2,       # Increased penalty for invalid actions
         e.WAITED: -1,               # Increased penalty for waiting
-        e.KILLED_SELF: -10,         # Increased penalty for self-destruction
-        e.SURVIVED_ROUND: 1,        # Increased reward for survival
+        e.KILLED_SELF: -5,         # Increased penalty for self-destruction
+        e.SURVIVED_ROUND: 2,       # Increased reward for survival
         e.CRATE_DESTROYED: 3,       # Reward per crate destroyed
-        e.MOVED_DOWN: -0.05,
-        e.MOVED_LEFT: -0.05,
-        e.MOVED_RIGHT: -0.05,
-        e.MOVED_UP: -0.05,
+        e.MOVED_DOWN: -0.15,
+        e.MOVED_LEFT: -0.15,
+        e.MOVED_RIGHT: -0.15,
+        e.MOVED_UP: -0.15,
         e.BOMB_DROPPED: 0,          # Base reward for dropping bombs, adjusted below
-        e.GOT_KILLED: -5,           # Penalty for being killed
+        e.GOT_KILLED: -5,          # Penalty for being killed
         e.OPPONENT_ELIMINATED: 5,   # Reward for eliminating an opponent
         'MOVED_TO_NEW_POSITION': 0.2,       # Small reward for exploring
         'MOVED_TO_RECENT_POSITION': -2,     # Penalty for revisiting recent positions
@@ -252,5 +303,6 @@ def reward_from_events(self, events: List[str], game_state: dict) -> float:
 
     # Track rewards for logging
     self.rewards_episode.append(reward)
+    self.logger.debug(f"Calculated reward: {reward}")
 
     return reward
