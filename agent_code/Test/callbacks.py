@@ -146,7 +146,7 @@ def act(self, game_state: dict) -> str:
     return action
 
 def is_move_valid(x, y, game_state):
-    """Check if the move to (x, y) is valid based on obstacles and bombs."""
+    """Check if the move to (x, y) is valid based on obstacles, bombs, and explosions."""
     field = game_state['field']
     if x < 0 or x >= field.shape[0] or y < 0 or y >= field.shape[1]:
         return False
@@ -157,6 +157,10 @@ def is_move_valid(x, y, game_state):
         return False
     others = game_state['others']
     if any((ox, oy) == (x, y) for _, _, _, (ox, oy) in others):
+        return False
+    # Check for current explosions
+    explosion_map = game_state['explosion_map']
+    if explosion_map[x, y] > 0:
         return False
     return True
 
@@ -178,12 +182,12 @@ def count_crates_destroyed(arena, x, y):
                 break
     return count
 
-def get_escape_routes(arena, x, y, bomb_map):
+def get_escape_routes(arena, x, y, bomb_map, game_state):
     """Calculate the number of safe directions the agent can move to after placing a bomb."""
     safe_directions = 0
     for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]:
         nx, ny = x + dx, y + dy
-        if is_move_valid(nx, ny, {'field': arena, 'bombs': [], 'others': []}):
+        if is_move_valid(nx, ny, game_state):
             if bomb_map[nx, ny] > 0:
                 safe_directions += 1
     return safe_directions
@@ -201,10 +205,24 @@ def state_to_features(game_state: dict) -> np.ndarray:
 
     # Initialize bomb map
     bomb_map = np.ones(arena.shape) * 5  # Distance to the nearest bomb
+
+    # Update bomb map with bombs that will explode
     for (bx, by), t in bombs:
-        for (i, j) in [(bx + h, by) for h in range(-3, 4)] + [(bx, by + h) for h in range(-3, 4)]:
-            if 0 <= i < arena.shape[0] and 0 <= j < arena.shape[1]:
-                bomb_map[i, j] = min(bomb_map[i, j], t)
+        for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]:
+            for i in range(1, 4):
+                nx, ny = bx + dx*i, by + dy*i
+                if 0 <= nx < arena.shape[0] and 0 <= ny < arena.shape[1]:
+                    if arena[nx, ny] == -1:
+                        break
+                    bomb_map[nx, ny] = min(bomb_map[nx, ny], t)
+                    if arena[nx, ny] != 0:
+                        break
+                else:
+                    break
+
+    # Update bomb map with current explosions
+    explosion_map = game_state['explosion_map']
+    bomb_map[explosion_map > 0] = 0  # Explosion is currently at these tiles
 
     # Feature 1-4: Valid moves (UP, DOWN, LEFT, RIGHT)
     valid_up = is_move_valid(x, y - 1, game_state)
@@ -298,7 +316,7 @@ def state_to_features(game_state: dict) -> np.ndarray:
     # New Features for Task 2
 
     # Feature 25: Escape routes after bomb placement (normalized)
-    escape_routes = get_escape_routes(arena, x, y, bomb_map) / 4.0  # Normalize by max possible (4 directions)
+    escape_routes = get_escape_routes(arena, x, y, bomb_map, game_state) / 4.0  # Normalize by max possible (4 directions)
 
     # Feature 26: Is bomb placement safe (binary)
     is_bomb_placement_safe = int(escape_routes > 0)
@@ -321,7 +339,7 @@ def state_to_features(game_state: dict) -> np.ndarray:
         for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]:
             nx, ny = cx + dx, cy + dy
             if (0 <= nx < arena.shape[0]) and (0 <= ny < arena.shape[1]):
-                if (nx, ny) not in visited and arena[nx, ny] == 0:
+                if (nx, ny) not in visited and arena[nx, ny] == 0 and bomb_map[nx, ny] > 0:
                     visited.add((nx, ny))
                     queue.append((nx, ny, dist + 1))
     distance_to_nearest_safe_tile = nearest_safe_distance / (arena.shape[0] + arena.shape[1])  # Normalize

@@ -251,7 +251,7 @@ def reward_from_events(self, events: List[str], game_state: dict) -> float:
         e.OPPONENT_ELIMINATED: 5,     # Reward for eliminating an opponent
         'MOVED_TO_NEW_POSITION': 0.5,        # Small reward for exploring
         'MOVED_TO_RECENT_POSITION': -6,      # Penalty for revisiting recent positions
-        'GAME_WON': 500                        # Huge reward for winning the game
+        #'GAME_WON': 500                        # Huge reward for winning the game
     }
 
     # Check for custom events
@@ -308,6 +308,11 @@ def reward_from_events(self, events: List[str], game_state: dict) -> float:
             distance_scale = (blast_radius - distance + 1) / (blast_radius + 1)  # Closer distance -> higher punishment
             time_scale = (max_time - t + 1) / (max_time + 1)              # Less time remaining -> higher punishment
             punishment += base_punishment * distance_scale * time_scale
+
+    # Check for current explosions and add penalty
+    explosion_map = game_state['explosion_map']
+    if explosion_map[agent_x, agent_y] > 0:
+        punishment += -10  # High penalty for being in an explosion
 
     # Compute total reward
     reward = sum(game_rewards.get(event, 0) for event in events) + punishment
