@@ -86,51 +86,61 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
     other_agents = last_game_state.get('others', [])
     self.logger.info(f"Other agents: {other_agents}")
 
-    # Collect scores and steps of all agents, along with survival status
-    all_agents = [(agent_name, agent_score, agent_step, agent_survived)]  # Include our agent
-
-    for other_agent in other_agents:
-        other_agent_name = other_agent[0]
-        other_agent_score = other_agent[1]
-        other_agent_step = last_game_state.get('agent_steps', {}).get(other_agent_name, last_game_state['step'])
-        other_agent_alive = other_agent[3] != (-1, -1)  # Assuming dead agents have position (-1, -1)
-        all_agents.append((other_agent_name, other_agent_score, other_agent_step, other_agent_alive))
-        self.logger.info(f"Other agent '{other_agent_name}' score: {other_agent_score}, step reached: {other_agent_step}, alive: {other_agent_alive}")
-
-    # Filter out agents who are dead
-    surviving_agents = [agent for agent in all_agents if agent[3]]  # Only include alive agents
-
-    if not surviving_agents:
-        # No agents survived, no winner
-        self.logger.info("No agents survived. No winner.")
-    else:
-        # Determine the agent with the highest score among surviving agents
-        max_score = max(score for _, score, _, _ in surviving_agents)
-        agents_with_max_score = [agent for agent in surviving_agents if agent[1] == max_score]
-
-        self.logger.info(f"Surviving agents with max score {max_score}: {agents_with_max_score}")
-
-        if len(agents_with_max_score) == 1:
-            # Only one agent has the highest score among surviving agents
-            winner = agents_with_max_score[0]
-            if winner[0] == agent_name:
-                agent_won = True
-                self.logger.info(f"Agent '{agent_name}' has won the game with the highest score among surviving agents.")
-            else:
-                self.logger.info(f"Agent '{agent_name}' did not win. Winner is '{winner[0]}'.")
+    if len(other_agents) == 0:
+        # Single-player mode
+        if agent_survived and len(last_game_state.get('coins', [])) == 0:
+            # Agent survived and collected all the coins
+            agent_won = True
+            self.logger.info(f"Agent '{agent_name}' has won the game by collecting all coins.")
         else:
-            # Tie situation among surviving agents: Agent who reached the score first wins
-            earliest_step = min(step for _, _, step, _ in agents_with_max_score)
-            winners = [agent for agent in agents_with_max_score if agent[2] == earliest_step]
-            winner = winners[0]  # Assuming there's only one agent who reached the earliest step
-            self.logger.info(f"Tie detected among surviving agents. Agent(s) who reached the score first: {winners}")
+            self.logger.info(f"Agent '{agent_name}' did not win the game in single-player mode.")
+    else:
+        # Multi-player mode
+        # Collect scores and steps of all agents, along with survival status
+        all_agents = [(agent_name, agent_score, agent_step, agent_survived)]  # Include our agent
 
-            if winner[0] == agent_name:
-                agent_won = True
-                self.logger.info(f"Agent '{agent_name}' has won the game by reaching the highest score first among surviving agents.")
+        for other_agent in other_agents:
+            other_agent_name = other_agent[0]
+            other_agent_score = other_agent[1]
+            other_agent_step = last_game_state.get('agent_steps', {}).get(other_agent_name, last_game_state['step'])
+            other_agent_alive = other_agent[3] != (-1, -1)  # Assuming dead agents have position (-1, -1)
+            all_agents.append((other_agent_name, other_agent_score, other_agent_step, other_agent_alive))
+            self.logger.info(f"Other agent '{other_agent_name}' score: {other_agent_score}, step reached: {other_agent_step}, alive: {other_agent_alive}")
+
+        # Filter out agents who are dead
+        surviving_agents = [agent for agent in all_agents if agent[3]]  # Only include alive agents
+
+        if not surviving_agents:
+            # No agents survived, no winner
+            self.logger.info("No agents survived. No winner.")
+        else:
+            # Determine the agent with the highest score among surviving agents
+            max_score = max(score for _, score, _, _ in surviving_agents)
+            agents_with_max_score = [agent for agent in surviving_agents if agent[1] == max_score]
+
+            self.logger.info(f"Surviving agents with max score {max_score}: {agents_with_max_score}")
+
+            if len(agents_with_max_score) == 1:
+                # Only one agent has the highest score among surviving agents
+                winner = agents_with_max_score[0]
+                if winner[0] == agent_name:
+                    agent_won = True
+                    self.logger.info(f"Agent '{agent_name}' has won the game with the highest score among surviving agents.")
+                else:
+                    self.logger.info(f"Agent '{agent_name}' did not win. Winner is '{winner[0]}'.")
             else:
-                self.logger.info(f"Agent '{agent_name}' did not win. Winner is '{winner[0]}'.")
-    
+                # Tie situation among surviving agents: Agent who reached the score first wins
+                earliest_step = min(step for _, _, step, _ in agents_with_max_score)
+                winners = [agent for agent in agents_with_max_score if agent[2] == earliest_step]
+                winner = winners[0]  # Assuming there's only one agent who reached the earliest step
+                self.logger.info(f"Tie detected among surviving agents. Agent(s) who reached the score first: {winners}")
+
+                if winner[0] == agent_name:
+                    agent_won = True
+                    self.logger.info(f"Agent '{agent_name}' has won the game by reaching the highest score first among surviving agents.")
+                else:
+                    self.logger.info(f"Agent '{agent_name}' did not win. Winner is '{winner[0]}'.")
+
     if agent_won:
         events.append('GAME_WON')
         self.logger.info("Agent has won the game!")
@@ -225,10 +235,10 @@ def reward_from_events(self, events: List[str], game_state: dict) -> float:
     self.logger.debug(f"Events received for reward calculation: {events}")
 
     game_rewards = {
-        e.COIN_COLLECTED: 15,        # Increased reward to encourage collecting coins
+        e.COIN_COLLECTED: 30,        # Increased reward to encourage collecting coins
         e.KILLED_OPPONENT: 25,        # Increased reward for killing opponents
         e.INVALID_ACTION: -6,         # Increased penalty for invalid actions
-        e.WAITED: -1,                 # Increased penalty for waiting
+        e.WAITED: -0.5,                 # Increased penalty for waiting
         e.KILLED_SELF: -10,           # Increased penalty for self-destruction
         e.SURVIVED_ROUND: 2,          # Increased reward for survival
         e.CRATE_DESTROYED: 2,         # Reward per crate destroyed
@@ -240,7 +250,7 @@ def reward_from_events(self, events: List[str], game_state: dict) -> float:
         e.GOT_KILLED: -10,             # Penalty for being killed
         e.OPPONENT_ELIMINATED: 5,     # Reward for eliminating an opponent
         'MOVED_TO_NEW_POSITION': 0.5,        # Small reward for exploring
-        'MOVED_TO_RECENT_POSITION': -4,      # Penalty for revisiting recent positions
+        'MOVED_TO_RECENT_POSITION': -6,      # Penalty for revisiting recent positions
         'GAME_WON': 500                        # Huge reward for winning the game
     }
 
