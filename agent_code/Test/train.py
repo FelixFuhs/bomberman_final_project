@@ -225,11 +225,11 @@ def reward_from_events(self, events: List[str], game_state: dict) -> float:
     self.logger.debug(f"Events received for reward calculation: {events}")
 
     game_rewards = {
-        e.COIN_COLLECTED: 10,        # Increased reward to encourage collecting coins
-        e.KILLED_OPPONENT: 15,        # Increased reward for killing opponents
-        e.INVALID_ACTION: -5,         # Increased penalty for invalid actions
+        e.COIN_COLLECTED: 15,        # Increased reward to encourage collecting coins
+        e.KILLED_OPPONENT: 25,        # Increased reward for killing opponents
+        e.INVALID_ACTION: -6,         # Increased penalty for invalid actions
         e.WAITED: -1,                 # Increased penalty for waiting
-        e.KILLED_SELF: -50,           # Increased penalty for self-destruction
+        e.KILLED_SELF: -10,           # Increased penalty for self-destruction
         e.SURVIVED_ROUND: 2,          # Increased reward for survival
         e.CRATE_DESTROYED: 2,         # Reward per crate destroyed
         e.MOVED_DOWN: -0.15,
@@ -237,10 +237,10 @@ def reward_from_events(self, events: List[str], game_state: dict) -> float:
         e.MOVED_RIGHT: -0.15,
         e.MOVED_UP: -0.15,
         e.BOMB_DROPPED: 0,            # Base reward for dropping bombs, adjusted below
-        e.GOT_KILLED: -5,             # Penalty for being killed
+        e.GOT_KILLED: -10,             # Penalty for being killed
         e.OPPONENT_ELIMINATED: 5,     # Reward for eliminating an opponent
         'MOVED_TO_NEW_POSITION': 0.5,        # Small reward for exploring
-        'MOVED_TO_RECENT_POSITION': -2,      # Penalty for revisiting recent positions
+        'MOVED_TO_RECENT_POSITION': -4,      # Penalty for revisiting recent positions
         'GAME_WON': 500                        # Huge reward for winning the game
     }
 
@@ -303,7 +303,7 @@ def reward_from_events(self, events: List[str], game_state: dict) -> float:
     reward = sum(game_rewards.get(event, 0) for event in events) + punishment
 
     # Scale the total reward
-    scaling_factor = 0.1
+    scaling_factor = 0.5
     reward *= scaling_factor
 
     # Track rewards for logging

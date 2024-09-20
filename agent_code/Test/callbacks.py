@@ -271,7 +271,7 @@ def state_to_features(game_state: dict) -> np.ndarray:
     adjacent_bomb = int(any(bomb_map[pos] <= 3 for pos in adjacent_positions if 0 <= pos[0] < arena.shape[0] and 0 <= pos[1] < arena.shape[1]))
 
     # Feature 18: Time until explosion at agent's position (normalized)
-    time_until_explosion = bomb_map[x, y] / 5.0  # Normalize by maximum bomb timer
+    time_until_explosion = bomb_map[x, y] / 4.0  # Normalize by maximum bomb timer
 
     # Feature 19: Is agent adjacent to an opponent (binary)
     adjacent_opponent = int(any(pos in others for pos in adjacent_positions))
@@ -327,7 +327,7 @@ def state_to_features(game_state: dict) -> np.ndarray:
     distance_to_nearest_safe_tile = nearest_safe_distance / (arena.shape[0] + arena.shape[1])  # Normalize
 
     # Feature 29: Bomb threat level at current position (normalized)
-    bomb_threat_level = (5.0 - bomb_map[x, y]) / 5.0  # Higher value means more urgent threat
+    bomb_threat_level = (4.0 - bomb_map[x, y]) / 4.0  # Higher value means more urgent threat
 
     # Feature 30: Is agent in bomb blast zone (binary)
     is_in_bomb_blast_zone = int(bomb_map[x, y] <= 3)
