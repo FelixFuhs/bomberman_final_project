@@ -76,7 +76,7 @@ def setup(self):
     print(f"Using device: {device_name}")  # Print statement to verify device
     self.logger.info(f"Model is using device: {device_name}")
 
-    input_size = 30  # Adjusted to match the new feature vector size
+    input_size = 27  # Adjusted to match the new feature vector size
 
     self.q_network = DQN(input_size, len(ACTIONS)).to(self.device)
     self.target_network = DQN(input_size, len(ACTIONS)).to(self.device)
@@ -273,32 +273,17 @@ def state_to_features(game_state: dict) -> np.ndarray:
     # Feature 13: Normalized step count (current step / max steps)
     normalized_step = game_state['step'] / 400
 
-    # Feature 14: Bias feature (constant value)
-    bias_feature = 1  # A constant feature to help the network learn bias
-
-    # Additional Features
-
-    # Feature 15: Number of valid actions (normalized)
-    num_valid_actions = sum([valid_up, valid_down, valid_left, valid_right]) / 4.0
-
-    # Feature 16: Number of crates left (normalized)
+    # Feature 14: Number of crates left (normalized)
     num_crates_left = np.sum(arena == 1) / ((arena.shape[0] - 2) * (arena.shape[1] - 2))  # Exclude walls
 
-    # Feature 17: Is agent adjacent to a bomb about to explode (binary)
+    # Feature 15: Is agent adjacent to a bomb about to explode (binary)
     adjacent_positions = [(x + dx, y + dy) for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]]
     adjacent_bomb = int(any(bomb_map[pos] <= 3 for pos in adjacent_positions if 0 <= pos[0] < arena.shape[0] and 0 <= pos[1] < arena.shape[1]))
 
-    # Feature 18: Time until explosion at agent's position (normalized)
-    time_until_explosion = bomb_map[x, y] / 4.0  # Normalize by maximum bomb timer
-
-    # Feature 19: Is agent adjacent to an opponent (binary)
+    # Feature 16: Is agent adjacent to an opponent (binary)
     adjacent_opponent = int(any(pos in others for pos in adjacent_positions))
 
-    # Feature 20-21: Agent's own position (normalized)
-    agent_pos_x = x / arena.shape[0]
-    agent_pos_y = y / arena.shape[1]
-
-    # Feature 22-23: Nearest crate delta x and delta y (normalized)
+    # Feature 17-18: Nearest crate delta x and delta y (normalized)
     crates = np.argwhere(arena == 1)
     if crates.size > 0:
         distances = [(cx - x, cy - y) for (cx, cy) in crates]
@@ -310,22 +295,16 @@ def state_to_features(game_state: dict) -> np.ndarray:
         nearest_crate_dx = 0  # No crates left
         nearest_crate_dy = 0  # No crates left
 
-    # Feature 24: Number of crates that would be destroyed by placing a bomb at current position (normalized)
+    # Feature 19: Number of crates that would be destroyed by placing a bomb at current position (normalized)
     potential_crates_destroyed = count_crates_destroyed(arena, x, y) / 4.0  # Normalize by max possible (4 crates)
 
-    # New Features for Task 2
-
-    # Feature 25: Escape routes after bomb placement (normalized)
+    # Feature 20: Escape routes after bomb placement (normalized)
     escape_routes = get_escape_routes(arena, x, y, bomb_map, game_state) / 4.0  # Normalize by max possible (4 directions)
 
-    # Feature 26: Is bomb placement safe (binary)
+    # Feature 21: Is bomb placement safe (binary)
     is_bomb_placement_safe = int(escape_routes > 0)
 
-    # Feature 27: Crates in bomb range (normalized)
-    crates_in_bomb_range = potential_crates_destroyed  # Already normalized
-
-    # Feature 28: Distance to nearest safe tile (normalized)
-    # Using BFS to find nearest safe tile not in bomb blast radius
+    # Feature 22: Distance to nearest safe tile (normalized)
     from collections import deque
     visited = set()
     queue = deque()
@@ -344,23 +323,53 @@ def state_to_features(game_state: dict) -> np.ndarray:
                     queue.append((nx, ny, dist + 1))
     distance_to_nearest_safe_tile = nearest_safe_distance / (arena.shape[0] + arena.shape[1])  # Normalize
 
-    # Feature 29: Bomb threat level at current position (normalized)
+    # Feature 23: Bomb threat level at current position (normalized)
     bomb_threat_level = (4.0 - bomb_map[x, y]) / 4.0  # Higher value means more urgent threat
 
-    # Feature 30: Is agent in bomb blast zone (binary)
+    # Feature 24: Is agent in bomb blast zone (binary)
     is_in_bomb_blast_zone = int(bomb_map[x, y] <= 3)
+
+    # New Feature 25: Distance to nearest wall in x-direction (normalized)
+    left_distance = 0
+    for dx in range(1, x + 1):
+        if arena[x - dx, y] == -1:
+            break
+        left_distance += 1
+    right_distance = 0
+    for dx in range(1, arena.shape[0] - x):
+        if arena[x + dx, y] == -1:
+            break
+        right_distance += 1
+    nearest_wall_x = min(left_distance, right_distance) / (arena.shape[0] - 2)  # Normalize
+
+    # New Feature 26: Distance to nearest wall in y-direction (normalized)
+    up_distance = 0
+    for dy in range(1, y + 1):
+        if arena[x, y - dy] == -1:
+            break
+        up_distance += 1
+    down_distance = 0
+    for dy in range(1, arena.shape[1] - y):
+        if arena[x, y + dy] == -1:
+            break
+        down_distance += 1
+    nearest_wall_y = min(up_distance, down_distance) / (arena.shape[1] - 2)  # Normalize
+
+    # New Feature 27: Number of opponents remaining (normalized)
+    max_possible_opponents = 3  # Assuming maximum of 3 opponents in the game
+    num_opponents_remaining = len(others) / max_possible_opponents  # Normalize
 
     # Combine all features into a single feature vector
     features = [
         valid_up, valid_down, valid_left, valid_right,
         bomb_available, nearest_coin_dx, nearest_coin_dy,
         num_coins_remaining, nearest_opponent_dist, nearest_bomb_dist,
-        dead_end, adjacent_crates, normalized_step, bias_feature,
-        num_valid_actions, num_crates_left, adjacent_bomb,
-        time_until_explosion, adjacent_opponent, agent_pos_x, agent_pos_y,
+        dead_end, adjacent_crates, normalized_step,
+        num_crates_left, adjacent_bomb, adjacent_opponent,
         nearest_crate_dx, nearest_crate_dy, potential_crates_destroyed,
-        escape_routes, is_bomb_placement_safe, crates_in_bomb_range,
-        distance_to_nearest_safe_tile, bomb_threat_level, is_in_bomb_blast_zone  # New features added here
+        escape_routes, is_bomb_placement_safe,
+        distance_to_nearest_safe_tile, bomb_threat_level, is_in_bomb_blast_zone,
+        nearest_wall_x, nearest_wall_y, num_opponents_remaining  # New features added here
     ]
 
     return np.array(features, dtype=np.float32)

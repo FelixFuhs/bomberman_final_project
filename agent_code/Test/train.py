@@ -251,7 +251,7 @@ def reward_from_events(self, events: List[str], game_state: dict) -> float:
         e.OPPONENT_ELIMINATED: 5,     # Reward for eliminating an opponent
         'MOVED_TO_NEW_POSITION': 0.5,        # Small reward for exploring
         'MOVED_TO_RECENT_POSITION': -6,      # Penalty for revisiting recent positions
-        #'GAME_WON': 500                        # Huge reward for winning the game
+        'GAME_WON': 500                        # Huge reward for winning the game
     }
 
     # Check for custom events
