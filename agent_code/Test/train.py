@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import events as e
-from .callbacks import state_to_features, ACTIONS, create_graphs, count_crates_destroyed
+from .callbacks import state_to_features, ACTIONS, create_graphs, count_crates_destroyed, is_move_valid
 from .config import (TRANSITION_HISTORY_SIZE, BATCH_SIZE, GAMMA, TARGET_UPDATE,
                      LEARNING_RATE, TEMPERATURE_START, TEMPERATURE_END, TEMPERATURE_DECAY)
 
@@ -39,15 +39,46 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
     """Process game events and store transitions."""
     self.logger.debug(f"Events: {events} at step {new_game_state['step']}")
 
+    # Append TIME_PENALTY
+    events.append('TIME_PENALTY')
+
     # Convert game states to features
     old_features = state_to_features(old_game_state)
     new_features = state_to_features(new_game_state)
-    reward = reward_from_events(self, events, new_game_state)
 
-    # Store transition in replay buffer
     if old_features is not None and new_features is not None:
+        # Extract positions
+        old_position = old_game_state['self'][3]
+        new_position = new_game_state['self'][3]
+
+        # Compute distances to nearest coin
+        old_coin_distance = compute_distance_to_nearest_coin(old_game_state)
+        new_coin_distance = compute_distance_to_nearest_coin(new_game_state)
+
+        if old_coin_distance is not None and new_coin_distance is not None:
+            if new_coin_distance < old_coin_distance:
+                events.append('MOVED_TOWARDS_COIN')
+            elif new_coin_distance > old_coin_distance:
+                events.append('MOVED_AWAY_FROM_COIN')
+
+        # Determine if the agent is in a blast zone
+        old_in_blast_zone = is_in_blast_zone(old_game_state)
+        new_in_blast_zone = is_in_blast_zone(new_game_state)
+
+        # Check transitions
+        if not old_in_blast_zone and new_in_blast_zone:
+            events.append('MOVED_INTO_BLAST_ZONE')
+        elif old_in_blast_zone and new_in_blast_zone:
+            events.append('STAYED_IN_BLAST_ZONE')
+        elif old_in_blast_zone and not new_in_blast_zone:
+            events.append('ESCAPED_BLAST_ZONE')
+
+        # Store transition in replay buffer
+        reward = reward_from_events(self, events, new_game_state)
         self.transitions.append(Transition(old_features, self_action, new_features, reward))
         self.logger.debug(f"Stored transition. Buffer size: {len(self.transitions)}")
+    else:
+        reward = reward_from_events(self, events, new_game_state)
 
     # Optimize the model if we have enough samples
     if len(self.transitions) >= BATCH_SIZE:
@@ -249,9 +280,14 @@ def reward_from_events(self, events: List[str], game_state: dict) -> float:
         e.BOMB_DROPPED: 0,            # Base reward for dropping bombs, adjusted below
         e.GOT_KILLED: -10,             # Penalty for being killed
         e.OPPONENT_ELIMINATED: 5,     # Reward for eliminating an opponent
-        'MOVED_TO_NEW_POSITION': 0.5,        # Small reward for exploring
-        'MOVED_TO_RECENT_POSITION': -6,      # Penalty for revisiting recent positions
-        'GAME_WON': 500                        # Huge reward for winning the game
+        'MOVED_TO_NEW_POSITION': 2,        # Small reward for exploring
+        'MOVED_TO_RECENT_POSITION': -2,      # Penalty for revisiting recent positions
+        ##'GAME_WON': 500,                        # Huge reward for winning the game # ONLY USE FOR MULTIPLAYER TRAINING!
+        'MOVED_TOWARDS_COIN': 1,
+        'MOVED_AWAY_FROM_COIN': -1,
+        'MOVED_INTO_BLAST_ZONE': -10,
+        'STAYED_IN_BLAST_ZONE': -5,
+        'ESCAPED_BLAST_ZONE': 10,
     }
 
     # Check for custom events
@@ -280,42 +316,8 @@ def reward_from_events(self, events: List[str], game_state: dict) -> float:
             # Negative reward for unnecessary bomb
             game_rewards[e.BOMB_DROPPED] = -2
 
-    # Additional penalties to prevent self-destructive behavior
-    if 'MOVED_TO_RECENT_POSITION' in events:
-        game_rewards['MOVED_TO_RECENT_POSITION'] = -2
-
-    # Custom Reward: Punish moving inside bomb blast radius
-    # Base punishment
-    base_punishment = -1
-
-    # Bomb blast radius
-    blast_radius = 3
-
-    # Maximum bomb timer to consider for scaling
-    max_time = 4
-
-    # Initialize punishment
-    punishment = 0.0
-
-    # Agent's position
-    agent_x, agent_y = x, y
-
-    for bomb in game_state['bombs']:
-        (bx, by), t = bomb
-        distance = abs(agent_x - bx) + abs(agent_y - by)  # Manhattan distance
-        if distance <= blast_radius and t <= max_time:
-            # Scale punishment by closeness and urgency
-            distance_scale = (blast_radius - distance + 1) / (blast_radius + 1)  # Closer distance -> higher punishment
-            time_scale = (max_time - t + 1) / (max_time + 1)              # Less time remaining -> higher punishment
-            punishment += base_punishment * distance_scale * time_scale
-
-    # Check for current explosions and add penalty
-    explosion_map = game_state['explosion_map']
-    if explosion_map[agent_x, agent_y] > 0:
-        punishment += -10  # High penalty for being in an explosion
-
     # Compute total reward
-    reward = sum(game_rewards.get(event, 0) for event in events) + punishment
+    reward = sum(game_rewards.get(event, 0) for event in events)
 
     # Scale the total reward
     scaling_factor = 0.5
@@ -326,3 +328,43 @@ def reward_from_events(self, events: List[str], game_state: dict) -> float:
     self.logger.debug(f"Calculated scaled reward: {reward}")
 
     return reward
+
+def compute_distance_to_nearest_coin(game_state):
+    position = game_state['self'][3]
+    x, y = position
+    coins = game_state['coins']
+
+    if coins:
+        distances = [abs(cx - x) + abs(cy - y) for (cx, cy) in coins]
+        return min(distances)
+    else:
+        return None  # No coins left
+
+def is_in_blast_zone(game_state):
+    position = game_state['self'][3]
+    x, y = position
+    arena = game_state['field']
+
+    # Compute bomb map similar to state_to_features
+    bomb_map = np.full(arena.shape, np.inf)
+
+    bombs = game_state['bombs']
+
+    for (bx, by), bomb_timer in bombs:
+        # Mark the bomb position as dangerous at explosion time
+        bomb_map[bx, by] = min(bomb_map[bx, by], bomb_timer)
+
+        for dx, dy in [(-1, 0), (1,0), (0,-1), (0,1)]:
+            for i in range(1, 4):
+                nx, ny = bx + dx*i, by + dy*i
+                if 0 <= nx < arena.shape[0] and 0 <= ny < arena.shape[1]:
+                    if arena[nx, ny] != 0:
+                        break
+                    danger_time = bomb_timer - i
+                    if danger_time <= 0:
+                        bomb_map[nx, ny] = min(bomb_map[nx, ny], danger_time)
+                else:
+                    break
+
+    # Current position dangerous?
+    return bomb_map[x, y] <= 0

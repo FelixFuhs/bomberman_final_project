@@ -13,7 +13,7 @@ from .config import LEARNING_RATE, ACTIONS, TEMPERATURE_START  # Import necessar
 # Use the logger provided by the framework
 logger = logging.getLogger(__name__)
 
-# Neural Network for DQN with Batch Normalization
+# Neural Network for DQN with Batch Normalization and Dropout
 class DQN(nn.Module):
     def __init__(self, input_size, output_size):
         super(DQN, self).__init__()
@@ -32,6 +32,9 @@ class DQN(nn.Module):
         self.bn6 = nn.BatchNorm1d(32)           # BatchNorm for sixth layer
         self.fc7 = nn.Linear(32, output_size)   # Output layer
 
+        # Dropout layer to prevent overfitting
+        self.dropout = nn.Dropout(p=0.2)
+
         # Initialize weights using Xavier initialization
         self.apply(self._init_weights)
     
@@ -42,25 +45,37 @@ class DQN(nn.Module):
                 nn.init.constant_(module.bias, 0)
 
     def forward(self, x):
-        # Pass data through the network with ReLU activations and BatchNorm
+        # Pass data through the network with ReLU activations, BatchNorm, and Dropout
         x = self.fc1(x)
         x = self.bn1(x)
         x = torch.relu(x)
+        x = self.dropout(x)
+
         x = self.fc2(x)
         x = self.bn2(x)
         x = torch.relu(x)
+        x = self.dropout(x)
+
         x = self.fc3(x)
         x = self.bn3(x)
         x = torch.relu(x)
+        x = self.dropout(x)
+
         x = self.fc4(x)
         x = self.bn4(x)
         x = torch.relu(x)
+        x = self.dropout(x)
+
         x = self.fc5(x)
         x = self.bn5(x)
         x = torch.relu(x)
+        x = self.dropout(x)
+
         x = self.fc6(x)
         x = self.bn6(x)
         x = torch.relu(x)
+        x = self.dropout(x)
+
         return self.fc7(x)  # Output layer without activation
 
 def setup(self):
@@ -96,7 +111,8 @@ def setup(self):
     self.target_network.eval()
 
     # Using LEARNING_RATE from config.py
-    self.optimizer = torch.optim.Adam(self.q_network.parameters(), lr=LEARNING_RATE)
+    # Added weight decay for regularization
+    self.optimizer = torch.optim.Adam(self.q_network.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
     self.steps = 0
     self.temperature = TEMPERATURE_START  # Initialize temperature
     self.scores = []
@@ -150,7 +166,7 @@ def is_move_valid(x, y, game_state):
     field = game_state['field']
     if x < 0 or x >= field.shape[0] or y < 0 or y >= field.shape[1]:
         return False
-    if field[x, y] != 0:  # Not a free tile
+    if field[x, y] != 0:  # Not a free tile (wall or crate)
         return False
     bombs = game_state['bombs']
     if any((bx, by) == (x, y) for (bx, by), _ in bombs):
@@ -203,7 +219,7 @@ def state_to_features(game_state: dict) -> np.ndarray:
     bombs = game_state['bombs']
     others = [xy for (_, _, _, xy) in game_state['others']]
 
-    # Initialize bomb map
+    # Initialize bomb map with a finite large value
     bomb_map = np.ones(arena.shape) * 5  # Distance to the nearest bomb
 
     # Update bomb map with bombs that will explode
@@ -212,17 +228,21 @@ def state_to_features(game_state: dict) -> np.ndarray:
             for i in range(1, 4):
                 nx, ny = bx + dx*i, by + dy*i
                 if 0 <= nx < arena.shape[0] and 0 <= ny < arena.shape[1]:
-                    if arena[nx, ny] == -1:
+                    if arena[nx, ny] != 0:  # Wall or crate
                         break
                     bomb_map[nx, ny] = min(bomb_map[nx, ny], t)
-                    if arena[nx, ny] != 0:
-                        break
                 else:
                     break
 
     # Update bomb map with current explosions
     explosion_map = game_state['explosion_map']
-    bomb_map[explosion_map > 0] = 0  # Explosion is currently at these tiles
+    bomb_map[explosion_map > 0] = 0
+
+    # Tiles with current explosions (blasts last for 2 steps: t = 0 and t = -1)
+    explosion_indices = np.argwhere(explosion_map > 0)
+    for ex, ey in explosion_indices:
+        # Set bomb_map to 0 for tiles currently exploding
+        bomb_map[ex, ey] = 0
 
     # Feature 1-4: Valid moves (UP, DOWN, LEFT, RIGHT)
     valid_up = is_move_valid(x, y - 1, game_state)
@@ -324,7 +344,10 @@ def state_to_features(game_state: dict) -> np.ndarray:
     distance_to_nearest_safe_tile = nearest_safe_distance / (arena.shape[0] + arena.shape[1])  # Normalize
 
     # Feature 23: Bomb threat level at current position (normalized)
-    bomb_threat_level = (4.0 - bomb_map[x, y]) / 4.0  # Higher value means more urgent threat
+    # Ensure bomb_map[x, y] is within [0, 4] to avoid negative or infinite values
+    bomb_timer = min(bomb_map[x, y], 4.0)
+    bomb_threat_level = max(0.0, (4.0 - bomb_timer) / 4.0)  # Normalize between 0 and 1
+
 
     # Feature 24: Is agent in bomb blast zone (binary)
     is_in_bomb_blast_zone = int(bomb_map[x, y] <= 3)
