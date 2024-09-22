@@ -10,14 +10,9 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import events as e
-from .callbacks import (
-    state_to_features, ACTIONS, create_graphs,
-    count_crates_destroyed, get_escape_routes, get_bomb_map
-)
-from .config import (
-    TRANSITION_HISTORY_SIZE, BATCH_SIZE, GAMMA, TARGET_UPDATE,
-    LEARNING_RATE, TEMPERATURE_START, TEMPERATURE_END, TEMPERATURE_DECAY
-)
+from .callbacks import state_to_features, ACTIONS, create_graphs, count_crates_destroyed
+from .config import (TRANSITION_HISTORY_SIZE, BATCH_SIZE, GAMMA, TARGET_UPDATE,
+                     LEARNING_RATE, TEMPERATURE_START, TEMPERATURE_END, TEMPERATURE_DECAY)
 
 # Transition tuple for storing experiences
 Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'))
@@ -39,8 +34,6 @@ def setup_training(self):
     self.positions_visited = set()  # To track unique positions visited in an episode
     self.coordinate_history = deque([], 15)  # Track the last 15 positions
     self.rewards_episode = []
-    self.last_game_state = None  # For tracking previous state in game_events_occurred
-    self.last_action = None  # For tracking previous action in game_events_occurred
 
 def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_state: dict, events: List[str]):
     """Process game events and store transitions."""
@@ -49,7 +42,7 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
     # Convert game states to features
     old_features = state_to_features(old_game_state)
     new_features = state_to_features(new_game_state)
-    reward = reward_from_events(self, events, new_game_state, old_game_state)
+    reward = reward_from_events(self, events, new_game_state)
 
     # Store transition in replay buffer
     if old_features is not None and new_features is not None:
@@ -69,27 +62,92 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
         self.logger.info(f"Target network updated at step {self.total_training_steps}")
 
     # Update temperature for exploration-exploitation balance
-    self.temperature = max(
-        TEMPERATURE_END,
-        TEMPERATURE_START * np.exp(-1. * self.total_training_steps / TEMPERATURE_DECAY)
-    )
+    self.temperature = max(TEMPERATURE_END, TEMPERATURE_START * np.exp(-1. * self.total_training_steps / TEMPERATURE_DECAY))
     self.logger.debug(f"Temperature decayed to {self.temperature:.4f}")
     self.total_training_steps += 1
 
-    # Update last_game_state and last_action for next call
-    self.last_game_state = old_game_state
-    self.last_action = self_action
-
 def end_of_round(self, last_game_state: dict, last_action: str, events: List[str]):
-    """Called at the end of each game to finalize training."""
     self.logger.info(f"End of round. Events: {events}")
 
-    # Check if the agent won the game
-    agent_won = 'GAME_WON' in events
+    # Initialize variables
+    agent_won = False
+
+    # Check if the agent survived
+    agent_survived = e.KILLED_SELF not in events and e.GOT_KILLED not in events
+    self.logger.info(f"Agent survived: {agent_survived}")
+
+    # Extract agent's name and score
+    agent_name = last_game_state['self'][0]
+    agent_score = last_game_state['self'][1]
+    agent_step = last_game_state['step']  # Assuming step count is available
+
+    self.logger.info(f"Agent '{agent_name}' score: {agent_score}")
+
+    other_agents = last_game_state.get('others', [])
+    self.logger.info(f"Other agents: {other_agents}")
+
+    if len(other_agents) == 0:
+        # Single-player mode
+        if agent_survived and len(last_game_state.get('coins', [])) == 0:
+            # Agent survived and collected all the coins
+            agent_won = True
+            self.logger.info(f"Agent '{agent_name}' has won the game by collecting all coins.")
+        else:
+            self.logger.info(f"Agent '{agent_name}' did not win the game in single-player mode.")
+    else:
+        # Multi-player mode
+        # Collect scores and steps of all agents, along with survival status
+        all_agents = [(agent_name, agent_score, agent_step, agent_survived)]  # Include our agent
+
+        for other_agent in other_agents:
+            other_agent_name = other_agent[0]
+            other_agent_score = other_agent[1]
+            other_agent_step = last_game_state.get('agent_steps', {}).get(other_agent_name, last_game_state['step'])
+            other_agent_alive = other_agent[3] != (-1, -1)  # Assuming dead agents have position (-1, -1)
+            all_agents.append((other_agent_name, other_agent_score, other_agent_step, other_agent_alive))
+            self.logger.info(f"Other agent '{other_agent_name}' score: {other_agent_score}, step reached: {other_agent_step}, alive: {other_agent_alive}")
+
+        # Filter out agents who are dead
+        surviving_agents = [agent for agent in all_agents if agent[3]]  # Only include alive agents
+
+        if not surviving_agents:
+            # No agents survived, no winner
+            self.logger.info("No agents survived. No winner.")
+        else:
+            # Determine the agent with the highest score among surviving agents
+            max_score = max(score for _, score, _, _ in surviving_agents)
+            agents_with_max_score = [agent for agent in surviving_agents if agent[1] == max_score]
+
+            self.logger.info(f"Surviving agents with max score {max_score}: {agents_with_max_score}")
+
+            if len(agents_with_max_score) == 1:
+                # Only one agent has the highest score among surviving agents
+                winner = agents_with_max_score[0]
+                if winner[0] == agent_name:
+                    agent_won = True
+                    self.logger.info(f"Agent '{agent_name}' has won the game with the highest score among surviving agents.")
+                else:
+                    self.logger.info(f"Agent '{agent_name}' did not win. Winner is '{winner[0]}'.")
+            else:
+                # Tie situation among surviving agents: Agent who reached the score first wins
+                earliest_step = min(step for _, _, step, _ in agents_with_max_score)
+                winners = [agent for agent in agents_with_max_score if agent[2] == earliest_step]
+                winner = winners[0]  # Assuming there's only one agent who reached the earliest step
+                self.logger.info(f"Tie detected among surviving agents. Agent(s) who reached the score first: {winners}")
+
+                if winner[0] == agent_name:
+                    agent_won = True
+                    self.logger.info(f"Agent '{agent_name}' has won the game by reaching the highest score first among surviving agents.")
+                else:
+                    self.logger.info(f"Agent '{agent_name}' did not win. Winner is '{winner[0]}'.")
+
+    if agent_won:
+        events.append('GAME_WON')
+        self.logger.info("Agent has won the game!")
 
     # Final transition
     last_features = state_to_features(last_game_state)
-    reward = reward_from_events(self, events, last_game_state, self.last_game_state)
+    reward = reward_from_events(self, events, last_game_state)
     if last_features is not None:
         self.transitions.append(Transition(last_features, last_action, None, reward))
         self.logger.debug(f"Final transition stored with reward {reward}. Buffer size: {len(self.transitions)}")
@@ -108,7 +166,7 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
         self.logger.error(f"Error saving model: {exc}")
 
     # Track game performance
-    self.scores.append(last_game_state['self'][1])
+    self.scores.append(agent_score)
 
     # Track total rewards
     total_reward = sum(self.rewards_episode)
@@ -118,17 +176,18 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
     self.rewards_episode = []
     self.positions_visited = set()
     self.coordinate_history = deque([], 15)
-    self.last_game_state = None
-    self.last_action = None
 
     # Create graphs every 100 games
     if self.game_counter % 100 == 0:
         avg_score = np.mean(self.scores[-100:]) if len(self.scores) >= 100 else np.mean(self.scores)
         avg_reward = np.mean(self.total_rewards[-100:]) if len(self.total_rewards) >= 100 else np.mean(self.total_rewards)
         self.logger.info(f"Game {self.game_counter}: Temperature {self.temperature:.4f}, Avg. score (last 100 games): {avg_score:.2f}, Avg. reward: {avg_reward:.2f}")
-        self.create_graphs()
+        create_graphs(self)
 
     self.game_counter += 1
+
+    # Reset agent score steps for the next round
+    self.agent_score_steps = {}
 
 def optimize_model(self):
     """Perform a single optimization step."""
@@ -143,18 +202,10 @@ def optimize_model(self):
     non_final_mask = torch.tensor([s is not None for s in batch.next_state], device=self.device, dtype=torch.bool)
 
     # Convert the list of non-final next states to a tensor
-    non_final_next_states = torch.tensor(
-        [s for s in batch.next_state if s is not None],
-        device=self.device,
-        dtype=torch.float32
-    )
+    non_final_next_states = torch.tensor([s for s in batch.next_state if s is not None], device=self.device, dtype=torch.float32)
 
     state_batch = torch.tensor(np.array(batch.state), device=self.device, dtype=torch.float32)
-    action_batch = torch.tensor(
-        [ACTIONS.index(a) for a in batch.action],
-        device=self.device,
-        dtype=torch.long
-    ).unsqueeze(1)
+    action_batch = torch.tensor([ACTIONS.index(a) for a in batch.action], device=self.device, dtype=torch.long).unsqueeze(1)
     reward_batch = torch.tensor(batch.reward, device=self.device, dtype=torch.float32)
 
     # Compute Q(s, a) using the main network
@@ -179,61 +230,35 @@ def optimize_model(self):
 
     return loss.item()
 
-def reward_from_events(self, events: List[str], game_state: dict, old_game_state: dict) -> float:
+def reward_from_events(self, events: List[str], game_state: dict) -> float:
     """Translate game events into scaled rewards."""
     self.logger.debug(f"Events received for reward calculation: {events}")
 
     game_rewards = {
         e.COIN_COLLECTED: 30,        # Increased reward to encourage collecting coins
-        e.KILLED_OPPONENT: 25,       # Increased reward for killing opponents
-        e.INVALID_ACTION: -6,        # Increased penalty for invalid actions
-        e.WAITED: -1,                # Penalty for waiting
-        e.KILLED_SELF: -20,          # Increased penalty for self-destruction
-        e.SURVIVED_ROUND: 2,         # Reward for survival
-        e.CRATE_DESTROYED: 2,        # Reward per crate destroyed
-        e.BOMB_DROPPED: 0,           # Base reward for dropping bombs, adjusted below
-        e.GOT_KILLED: -20,           # Penalty for being killed
-        e.OPPONENT_ELIMINATED: 5,    # Reward for eliminating an opponent
-        'MOVED_TO_NEW_POSITION': 0.5,      # Small reward for exploring
-        'MOVED_TO_RECENT_POSITION': -2,    # Penalty for revisiting recent positions
-        'GAME_WON': 500,                   # Huge reward for winning the game
-        'MOVED_TOWARDS_COIN': 1,           # Reward for moving towards coin
-        'MOVED_AWAY_FROM_COIN': -1,        # Penalty for moving away from coin
-        'SAFE_BOMB_DROP': 5,               # Reward for safe bomb drop
-        'DANGEROUS_BOMB_DROP': -5,         # Penalty for dangerous bomb drop
-        'STAYED_IN_BLAST_ZONE': -5,        # Penalty for staying in blast zone
-        'ESCAPED_BLAST_ZONE': 5,           # Reward for escaping blast zone
-        'TIME_PENALTY': -0.1               # Small penalty for each step
+        e.KILLED_OPPONENT: 25,        # Increased reward for killing opponents
+        e.INVALID_ACTION: -6,         # Increased penalty for invalid actions
+        e.WAITED: -0.5,                 # Increased penalty for waiting
+        e.KILLED_SELF: -10,           # Increased penalty for self-destruction
+        e.SURVIVED_ROUND: 2,          # Increased reward for survival
+        e.CRATE_DESTROYED: 2,         # Reward per crate destroyed
+        e.MOVED_DOWN: -0.15,
+        e.MOVED_LEFT: -0.15,
+        e.MOVED_RIGHT: -0.15,
+        e.MOVED_UP: -0.15,
+        e.BOMB_DROPPED: 0,            # Base reward for dropping bombs, adjusted below
+        e.GOT_KILLED: -10,             # Penalty for being killed
+        e.OPPONENT_ELIMINATED: 5,     # Reward for eliminating an opponent
+        'MOVED_TO_NEW_POSITION': 0.5,        # Small reward for exploring
+        'MOVED_TO_RECENT_POSITION': -6,      # Penalty for revisiting recent positions
+        'GAME_WON': 500                        # Huge reward for winning the game
     }
 
-    # Implement time-based penalty
-    events.append('TIME_PENALTY')
-
+    # Check for custom events
     position = game_state['self'][3]
     x, y = position
     arena = game_state['field']
 
-    # Check for custom events
-    if old_game_state is not None:
-        # Determine if agent moved towards or away from nearest coin
-        old_features = state_to_features(old_game_state)
-        new_features = state_to_features(game_state)
-
-        # Distance to nearest coin before and after
-        old_coin_dx = old_features[5]
-        old_coin_dy = old_features[6]
-        new_coin_dx = new_features[5]
-        new_coin_dy = new_features[6]
-
-        old_coin_distance = abs(old_coin_dx) + abs(old_coin_dy)
-        new_coin_distance = abs(new_coin_dx) + abs(new_coin_dy)
-
-        if new_coin_distance < old_coin_distance:
-            events.append('MOVED_TOWARDS_COIN')
-        elif new_coin_distance > old_coin_distance:
-            events.append('MOVED_AWAY_FROM_COIN')
-
-    # Determine if the move was to a new or recent position
     if position not in self.positions_visited:
         events.append('MOVED_TO_NEW_POSITION')
     else:
@@ -247,62 +272,57 @@ def reward_from_events(self, events: List[str], game_state: dict, old_game_state
     # Adjust reward for BOMB_DROPPED
     if e.BOMB_DROPPED in events:
         crates_destroyed = count_crates_destroyed(arena, x, y)
-        is_safe = is_bomb_placement_safe(game_state)
-        if crates_destroyed > 0 and is_safe:
-            # Positive reward for safe bomb drop
-            events.append('SAFE_BOMB_DROP')
+        if crates_destroyed > 0:
+            # Positive reward proportional to potential crates destroyed
+            bomb_reward = crates_destroyed * 2  # Adjust coefficient as needed
+            game_rewards[e.BOMB_DROPPED] = bomb_reward
         else:
-            # Negative reward for dangerous bomb drop
-            events.append('DANGEROUS_BOMB_DROP')
+            # Negative reward for unnecessary bomb
+            game_rewards[e.BOMB_DROPPED] = -2
 
-    # Check if agent stayed in or escaped blast zone
-    if old_game_state is not None:
-        old_bomb_map = get_bomb_map(old_game_state)
-        new_bomb_map = get_bomb_map(game_state)
-        old_in_blast_zone = old_bomb_map[x, y] <= 3
-        new_in_blast_zone = new_bomb_map[x, y] <= 3
-        if old_in_blast_zone and not new_in_blast_zone:
-            events.append('ESCAPED_BLAST_ZONE')
-        elif new_in_blast_zone:
-            events.append('STAYED_IN_BLAST_ZONE')
+    # Additional penalties to prevent self-destructive behavior
+    if 'MOVED_TO_RECENT_POSITION' in events:
+        game_rewards['MOVED_TO_RECENT_POSITION'] = -2
+
+    # Custom Reward: Punish moving inside bomb blast radius
+    # Base punishment
+    base_punishment = -1
+
+    # Bomb blast radius
+    blast_radius = 3
+
+    # Maximum bomb timer to consider for scaling
+    max_time = 4
+
+    # Initialize punishment
+    punishment = 0.0
+
+    # Agent's position
+    agent_x, agent_y = x, y
+
+    for bomb in game_state['bombs']:
+        (bx, by), t = bomb
+        distance = abs(agent_x - bx) + abs(agent_y - by)  # Manhattan distance
+        if distance <= blast_radius and t <= max_time:
+            # Scale punishment by closeness and urgency
+            distance_scale = (blast_radius - distance + 1) / (blast_radius + 1)  # Closer distance -> higher punishment
+            time_scale = (max_time - t + 1) / (max_time + 1)              # Less time remaining -> higher punishment
+            punishment += base_punishment * distance_scale * time_scale
+
+    # Check for current explosions and add penalty
+    explosion_map = game_state['explosion_map']
+    if explosion_map[agent_x, agent_y] > 0:
+        punishment += -10  # High penalty for being in an explosion
 
     # Compute total reward
-    reward = sum(game_rewards.get(event, 0) for event in events)
+    reward = sum(game_rewards.get(event, 0) for event in events) + punishment
+
+    # Scale the total reward
+    scaling_factor = 0.5
+    reward *= scaling_factor
 
     # Track rewards for logging
     self.rewards_episode.append(reward)
-    self.logger.debug(f"Calculated reward: {reward}")
+    self.logger.debug(f"Calculated scaled reward: {reward}")
 
     return reward
-
-def is_bomb_placement_safe(game_state):
-    """Check if placing a bomb at the agent's position is safe."""
-    x, y = game_state['self'][3]
-    bomb_map = get_bomb_map(game_state)
-    escape_routes = get_escape_routes(game_state['field'], x, y, bomb_map, game_state)
-    return escape_routes > 0
-
-def get_bomb_map(game_state):
-    """Utility function to get bomb map for the game state."""
-    arena = game_state['field']
-    bombs = game_state['bombs']
-    bomb_map = np.ones(arena.shape) * 5  # Distance to the nearest bomb
-
-    # Update bomb map with bombs that will explode
-    for (bx, by), t in bombs:
-        for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]:
-            for i in range(1, 4):
-                nx, ny = bx + dx*i, by + dy*i
-                if 0 <= nx < arena.shape[0] and 0 <= ny < arena.shape[1]:
-                    if arena[nx, ny] == -1:
-                        break
-                    bomb_map[nx, ny] = min(bomb_map[nx, ny], t)
-                    if arena[nx, ny] != 0:
-                        break
-                else:
-                    break
-
-    # Update bomb map with current explosions
-    explosion_map = game_state['explosion_map']
-    bomb_map[explosion_map > 0] = 0  # Explosion is currently at these tiles
-    return bomb_map

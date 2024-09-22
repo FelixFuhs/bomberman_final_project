@@ -76,7 +76,7 @@ def setup(self):
     print(f"Using device: {device_name}")  # Print statement to verify device
     self.logger.info(f"Model is using device: {device_name}")
 
-    input_size = 39  # Adjusted to match the new feature vector size
+    input_size = 27  # Adjusted to match the new feature vector size
 
     self.q_network = DQN(input_size, len(ACTIONS)).to(self.device)
     self.target_network = DQN(input_size, len(ACTIONS)).to(self.device)
@@ -164,13 +164,6 @@ def is_move_valid(x, y, game_state):
         return False
     return True
 
-def in_danger(x, y, bomb_map):
-    """Check if the position (x, y) is in danger (in bomb blast zone or explosion)."""
-    if bomb_map[x, y] <= 3:
-        return True
-    else:
-        return False
-
 def count_crates_destroyed(arena, x, y):
     """Count the number of crates that would be destroyed by placing a bomb at position (x, y)."""
     count = 0
@@ -242,15 +235,14 @@ def state_to_features(game_state: dict) -> np.ndarray:
 
     # Feature 6-7: Nearest coin delta x and delta y (normalized)
     if coins:
-        coin_distances = [(abs(cx - x) + abs(cy - y), cx - x, cy - y) for (cx, cy) in coins]
-        min_coin_distance, nearest_coin_dx, nearest_coin_dy = min(coin_distances, key=lambda d: d[0])
+        distances = [(cx - x, cy - y) for (cx, cy) in coins]
+        nearest_coin_dx, nearest_coin_dy = min(distances, key=lambda d: abs(d[0]) + abs(d[1]))
         max_distance = arena.shape[0] + arena.shape[1]
-        nearest_coin_dx_norm = nearest_coin_dx / max_distance
-        nearest_coin_dy_norm = nearest_coin_dy / max_distance
+        nearest_coin_dx /= max_distance
+        nearest_coin_dy /= max_distance
     else:
-        nearest_coin_dx_norm = 0  # No coins left
-        nearest_coin_dy_norm = 0  # No coins left
-        min_coin_distance = None
+        nearest_coin_dx = 0  # No coins left
+        nearest_coin_dy = 0  # No coins left
 
     # Feature 8: Number of coins remaining (normalized)
     num_coins_remaining = len(coins) / ((arena.shape[0] - 2) * (arena.shape[1] - 2))
@@ -294,15 +286,14 @@ def state_to_features(game_state: dict) -> np.ndarray:
     # Feature 17-18: Nearest crate delta x and delta y (normalized)
     crates = np.argwhere(arena == 1)
     if crates.size > 0:
-        crate_distances = [(abs(cx - x) + abs(cy - y), cx - x, cy - y) for (cx, cy) in crates]
-        min_crate_distance, nearest_crate_dx, nearest_crate_dy = min(crate_distances, key=lambda d: d[0])
+        distances = [(cx - x, cy - y) for (cx, cy) in crates]
+        nearest_crate_dx, nearest_crate_dy = min(distances, key=lambda d: abs(d[0]) + abs(d[1]))
         max_distance = arena.shape[0] + arena.shape[1]
-        nearest_crate_dx_norm = nearest_crate_dx / max_distance
-        nearest_crate_dy_norm = nearest_crate_dy / max_distance
+        nearest_crate_dx /= max_distance
+        nearest_crate_dy /= max_distance
     else:
-        nearest_crate_dx_norm = 0  # No crates left
-        nearest_crate_dy_norm = 0  # No crates left
-        min_crate_distance = None
+        nearest_crate_dx = 0  # No crates left
+        nearest_crate_dy = 0  # No crates left
 
     # Feature 19: Number of crates that would be destroyed by placing a bomb at current position (normalized)
     potential_crates_destroyed = count_crates_destroyed(arena, x, y) / 4.0  # Normalize by max possible (4 crates)
@@ -338,7 +329,7 @@ def state_to_features(game_state: dict) -> np.ndarray:
     # Feature 24: Is agent in bomb blast zone (binary)
     is_in_bomb_blast_zone = int(bomb_map[x, y] <= 3)
 
-    # Feature 25-26: Distance to nearest wall in x and y directions (normalized)
+    # New Feature 25: Distance to nearest wall in x-direction (normalized)
     left_distance = 0
     for dx in range(1, x + 1):
         if arena[x - dx, y] == -1:
@@ -351,6 +342,7 @@ def state_to_features(game_state: dict) -> np.ndarray:
         right_distance += 1
     nearest_wall_x = min(left_distance, right_distance) / (arena.shape[0] - 2)  # Normalize
 
+    # New Feature 26: Distance to nearest wall in y-direction (normalized)
     up_distance = 0
     for dy in range(1, y + 1):
         if arena[x, y - dy] == -1:
@@ -363,56 +355,21 @@ def state_to_features(game_state: dict) -> np.ndarray:
         down_distance += 1
     nearest_wall_y = min(up_distance, down_distance) / (arena.shape[1] - 2)  # Normalize
 
-    # Feature 27: Number of opponents remaining (normalized)
+    # New Feature 27: Number of opponents remaining (normalized)
     max_possible_opponents = 3  # Assuming maximum of 3 opponents in the game
     num_opponents_remaining = len(others) / max_possible_opponents  # Normalize
-
-    # New Features for Recommendations
-
-    # Feature 28-31: Safe move indicators (safe_up, safe_down, safe_left, safe_right)
-    safe_up = valid_up and not in_danger(x, y - 1, bomb_map)
-    safe_down = valid_down and not in_danger(x, y + 1, bomb_map)
-    safe_left = valid_left and not in_danger(x - 1, y, bomb_map)
-    safe_right = valid_right and not in_danger(x + 1, y, bomb_map)
-
-    # Feature 32-35: Directional indicators towards nearest coin
-    towards_coin_up = towards_coin_down = towards_coin_left = towards_coin_right = 0
-    if min_coin_distance is not None:
-        if nearest_coin_dy < 0:
-            towards_coin_up = 1
-        elif nearest_coin_dy > 0:
-            towards_coin_down = 1
-        if nearest_coin_dx < 0:
-            towards_coin_left = 1
-        elif nearest_coin_dx > 0:
-            towards_coin_right = 1
-
-    # Feature 36-39: Directional indicators towards nearest crate
-    towards_crate_up = towards_crate_down = towards_crate_left = towards_crate_right = 0
-    if min_crate_distance is not None:
-        if nearest_crate_dy < 0:
-            towards_crate_up = 1
-        elif nearest_crate_dy > 0:
-            towards_crate_down = 1
-        if nearest_crate_dx < 0:
-            towards_crate_left = 1
-        elif nearest_crate_dx > 0:
-            towards_crate_right = 1
 
     # Combine all features into a single feature vector
     features = [
         valid_up, valid_down, valid_left, valid_right,
-        bomb_available, nearest_coin_dx_norm, nearest_coin_dy_norm,
+        bomb_available, nearest_coin_dx, nearest_coin_dy,
         num_coins_remaining, nearest_opponent_dist, nearest_bomb_dist,
         dead_end, adjacent_crates, normalized_step,
         num_crates_left, adjacent_bomb, adjacent_opponent,
-        nearest_crate_dx_norm, nearest_crate_dy_norm, potential_crates_destroyed,
+        nearest_crate_dx, nearest_crate_dy, potential_crates_destroyed,
         escape_routes, is_bomb_placement_safe,
         distance_to_nearest_safe_tile, bomb_threat_level, is_in_bomb_blast_zone,
-        nearest_wall_x, nearest_wall_y, num_opponents_remaining,
-        safe_up, safe_down, safe_left, safe_right,
-        towards_coin_up, towards_coin_down, towards_coin_left, towards_coin_right,
-        towards_crate_up, towards_crate_down, towards_crate_left, towards_crate_right
+        nearest_wall_x, nearest_wall_y, num_opponents_remaining  # New features added here
     ]
 
     return np.array(features, dtype=np.float32)
