@@ -77,6 +77,8 @@ class DQN(nn.Module):
         x = self.dropout(x)
 
         return self.fc7(x)  # Output layer without activation
+    
+
 
 def setup(self):
     """Setup function to initialize networks and device."""
@@ -160,6 +162,14 @@ def act(self, game_state: dict) -> str:
 
     self.logger.debug(f"Chosen Action: {action}")
     return action
+
+
+# Helper function for Manhattan distance
+def manhattan_distance(pos1, pos2):
+    """Calculate the Manhattan distance between two positions."""
+    x1, y1 = pos1
+    x2, y2 = pos2
+    return abs(x1 - x2) + abs(y1 - y2)
 
 def is_move_valid(x, y, game_state):
     """Check if the move to (x, y) is valid based on obstacles, bombs, and explosions."""
