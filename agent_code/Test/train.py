@@ -17,6 +17,7 @@ from .config import (TRANSITION_HISTORY_SIZE, BATCH_SIZE, GAMMA, TARGET_UPDATE,
 # Transition tuple for storing experiences
 Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'))
 
+
 def setup_training(self):
     """Initialize training settings."""
     self.transitions = deque(maxlen=TRANSITION_HISTORY_SIZE)
@@ -35,6 +36,7 @@ def setup_training(self):
     self.coordinate_history = deque([], 15)  # Track the last 15 positions
     self.rewards_episode = []
     self.ignore_others_timer = 0  # Similar to rule-based agent
+
 
 def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_state: dict, events: List[str]):
     """Process game events and store transitions."""
@@ -58,21 +60,34 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
         else:
             events.append('AVOIDED_LOOP')
 
-        # Compute distances to nearest target
-        old_target = find_closest_target(old_game_state)
-        new_target = find_closest_target(new_game_state)
+        # Determine the target
+        old_target, old_target_type = find_closest_target(old_game_state)
+        new_target, new_target_type = find_closest_target(new_game_state)
+
+        # Check movements towards the target
         if old_target is not None and new_target is not None:
             old_distance = manhattan_distance(old_position, old_target)
             new_distance = manhattan_distance(new_position, new_target)
+
             if new_distance < old_distance:
-                events.append('MOVED_TOWARDS_TARGET')
+                if old_target_type == 'COIN':
+                    events.append('MOVED_TOWARDS_COIN')
+                elif old_target_type == 'CRATE':
+                    events.append('MOVED_TOWARDS_CRATE')
+                elif old_target_type == 'OPPONENT':
+                    events.append('MOVED_TOWARDS_OPPONENT')
             elif new_distance > old_distance:
-                events.append('MOVED_AWAY_FROM_TARGET')
+                if old_target_type == 'COIN':
+                    events.append('MOVED_AWAY_FROM_COIN')
+                elif old_target_type == 'CRATE':
+                    events.append('MOVED_AWAY_FROM_CRATE')
+                elif old_target_type == 'OPPONENT':
+                    events.append('MOVED_AWAY_FROM_OPPONENT')
 
         # If action was 'BOMB', check for bomb-related events
         if self_action == 'BOMB':
             if is_in_dead_end(new_game_state, new_position):
-                events.append('DROPPED_BOMB_AT_DEAD_END')
+                events.append('DROPPED_BOMB_IN_DEAD_END')
             if is_adjacent_to_crate(new_game_state, new_position):
                 events.append('DROPPED_BOMB_NEAR_CRATE')
             if is_adjacent_to_opponent(new_game_state, new_position):
@@ -95,8 +110,8 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
             events.append('RAN_AWAY_FROM_BOMB')
 
         # Store transition in replay buffer
-        old_features = state_to_features(old_game_state)
-        new_features = state_to_features(new_game_state)
+        old_features = state_to_features(self, old_game_state)
+        new_features = state_to_features(self, new_game_state)
         reward = reward_from_events(self, events, new_game_state)
 
         if old_features is not None and new_features is not None:
@@ -124,6 +139,7 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
     self.temperature = max(TEMPERATURE_END, TEMPERATURE_START * np.exp(-1.0 * self.total_training_steps / TEMPERATURE_DECAY))
     self.logger.debug(f"Temperature decayed to {self.temperature:.4f}")
     self.total_training_steps += 1
+
 
 def end_of_round(self, last_game_state: dict, last_action: str, events: List[str]):
     self.logger.info(f"End of round. Events: {events}")
@@ -205,7 +221,7 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
         self.logger.info("Agent has won the game!")
 
     # Final transition
-    last_features = state_to_features(last_game_state)
+    last_features = state_to_features(self, last_game_state)
     reward = reward_from_events(self, events, last_game_state)
     if last_features is not None:
         self.transitions.append(Transition(last_features, last_action, None, reward))
@@ -238,13 +254,14 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
     self.ignore_others_timer = 0  # Reset ignore_others_timer
 
     # Create graphs every 100 games
-    if self.game_counter % 100 == 0:
+    if self.game_counter % 100 == 0 and self.game_counter > 0:
         avg_score = np.mean(self.scores[-100:]) if len(self.scores) >= 100 else np.mean(self.scores)
         avg_reward = np.mean(self.total_rewards[-100:]) if len(self.total_rewards) >= 100 else np.mean(self.total_rewards)
         self.logger.info(f"Game {self.game_counter}: Temperature {self.temperature:.4f}, Avg. score (last 100 games): {avg_score:.2f}, Avg. reward: {avg_reward:.2f}")
         create_graphs(self)
 
     self.game_counter += 1
+
 
 def optimize_model(self):
     """Perform a single optimization step."""
@@ -271,7 +288,7 @@ def optimize_model(self):
     # Compute Q(s', a') for non-final states using Double DQN
     with torch.no_grad():
         next_state_actions = self.q_network(non_final_next_states).max(1)[1].unsqueeze(1)
-        next_state_values = torch.zeros(BATCH_SIZE, device=self.device)
+        next_state_values = torch.zeros(len(state_batch), device=self.device)
         next_state_values[non_final_mask] = self.target_network(non_final_next_states).gather(1, next_state_actions).squeeze()
 
     # Compute expected Q values
@@ -287,36 +304,41 @@ def optimize_model(self):
 
     return loss.item()
 
+
 def reward_from_events(self, events: List[str], game_state: dict) -> float:
     """Translate game events into scaled rewards."""
     self.logger.debug(f"Events received for reward calculation: {events}")
 
     game_rewards = {
-        e.COIN_COLLECTED: 30,
-        e.KILLED_OPPONENT: 50,
-        e.INVALID_ACTION: -5,
-        e.WAITED: -1,
-        e.KILLED_SELF: -50,
-        e.SURVIVED_ROUND: 10,
-        e.CRATE_DESTROYED: 5,
-        e.BOMB_DROPPED: 0,  # Adjusted below
+        e.COIN_COLLECTED: 100,  # Increased reward for collecting coins
+        e.KILLED_OPPONENT: 200,  # Increased reward for killing opponents
+        e.INVALID_ACTION: -10,
+        e.WAITED: -5,
+        e.KILLED_SELF: -100,
+        e.SURVIVED_ROUND: 50,
+        e.CRATE_DESTROYED: 20,
+        e.BOMB_DROPPED: -1,  # Default, adjusted below
         e.GOT_KILLED: -50,
         e.OPPONENT_ELIMINATED: 20,
         # Custom events
-        'TIME_PENALTY': -0.1,
-        'MOVED_TOWARDS_TARGET': 2,
-        'MOVED_AWAY_FROM_TARGET': -2,
-        'DROPPED_BOMB_AT_DEAD_END': 5,
-        'DROPPED_BOMB_NEAR_CRATE': 5,
-        'DROPPED_BOMB_NEAR_OPPONENT': 10,
-        'ESCAPED_FROM_BOMB': 10,
-        'STAYED_IN_BLAST_RADIUS': -10,
-        'RAN_AWAY_FROM_BOMB': 5,
-        'LOOP_DETECTED': -5,
+        'TIME_PENALTY': -1,
+        'MOVED_TOWARDS_COIN': 5,
+        'MOVED_AWAY_FROM_COIN': -5,
+        'MOVED_TOWARDS_CRATE': 2,
+        'MOVED_AWAY_FROM_CRATE': -2,
+        'DROPPED_BOMB_IN_DEAD_END': 5,
+        'DROPPED_BOMB_NEAR_CRATE': 10,
+        'DROPPED_BOMB_NEAR_OPPONENT': 20,
+        'ESCAPED_FROM_BOMB': 15,
+        'STAYED_IN_BLAST_RADIUS': -15,
+        'RAN_AWAY_FROM_BOMB': 10,
+        'LOOP_DETECTED': -10,
         'AVOIDED_LOOP': 5,
-        'MOVED_INTO_BLAST_ZONE': -10,
-        'STAYED_IN_BLAST_ZONE': -5,
-        'ESCAPED_BLAST_ZONE': 10,
+        'MOVED_INTO_BLAST_ZONE': -20,
+        'STAYED_IN_BLAST_ZONE': -10,
+        'ESCAPED_BLAST_ZONE': 15,
+        'MOVED_TOWARDS_OPPONENT': 2,
+        'MOVED_AWAY_FROM_OPPONENT': -2,
     }
 
     position = game_state['self'][3]
@@ -328,110 +350,115 @@ def reward_from_events(self, events: List[str], game_state: dict) -> float:
         crates_destroyed = count_crates_destroyed(arena, x, y)
         if crates_destroyed > 0:
             # Positive reward proportional to potential crates destroyed
-            bomb_reward = crates_destroyed * 2  # Adjust coefficient as needed
+            bomb_reward = crates_destroyed * 15  # Adjusted coefficient as needed
             game_rewards[e.BOMB_DROPPED] = bomb_reward
         else:
             # Negative reward for unnecessary bomb
-            game_rewards[e.BOMB_DROPPED] = -2
+            game_rewards[e.BOMB_DROPPED] = -10
 
     # Compute total reward
     reward = sum(game_rewards.get(event, 0) for event in events)
 
-    # Scale the total reward
-    scaling_factor = 1.0  # Adjusted scaling factor
-    reward *= scaling_factor
-
     # Track rewards for logging
     self.rewards_episode.append(reward)
-    self.logger.debug(f"Calculated scaled reward: {reward}")
+    self.logger.debug(f"Calculated reward: {reward}")
 
     return reward
 
-def compute_distance_to_nearest_coin(game_state):
-    position = game_state['self'][3]
-    x, y = position
-    coins = game_state['coins']
 
-    if coins:
-        distances = [abs(cx - x) + abs(cy - y) for (cx, cy) in coins]
-        return min(distances)
-    else:
-        return None  # No coins left
-
-def is_in_blast_zone(game_state):
-    position = game_state['self'][3]
-    x, y = position
-    arena = game_state['field']
-
-    # Compute bomb map similar to state_to_features
-    bomb_map = np.full(arena.shape, np.inf)
-
-    bombs = game_state['bombs']
-
-    for (bx, by), bomb_timer in bombs:
-        # Mark the bomb position as dangerous at explosion time
-        bomb_map[bx, by] = min(bomb_map[bx, by], bomb_timer)
-
-        for dx, dy in [(-1, 0), (1,0), (0,-1), (0,1)]:
-            for i in range(1, 4):
-                nx, ny = bx + dx*i, by + dy*i
-                if 0 <= nx < arena.shape[0] and 0 <= ny < arena.shape[1]:
-                    if arena[nx, ny] != 0:
-                        break
-                    danger_time = bomb_timer - i
-                    if danger_time <= 0:
-                        bomb_map[nx, ny] = min(bomb_map[nx, ny], danger_time)
-                else:
-                    break
-
-    # Current position dangerous?
-    return bomb_map[x, y] <= 0
-
+# Helper functions for event detection
 def manhattan_distance(pos1, pos2):
     x1, y1 = pos1
     x2, y2 = pos2
     return abs(x1 - x2) + abs(y1 - y2)
 
+
 def find_closest_target(game_state):
     x, y = game_state['self'][3]
     coins = game_state['coins']
     arena = game_state['field']
-    opponents = [xy for (_, _, _, xy) in game_state['others']]
     crates = np.argwhere(arena == 1)
-    targets = coins + [tuple(c) for c in crates] + opponents
-    if not targets:
-        return None
-    distances = [manhattan_distance((x, y), target) for target in targets]
-    min_idx = np.argmin(distances)
-    return targets[min_idx]
+    opponents = [xy for (_, _, _, xy) in game_state['others']]
+
+    # First, target coins
+    if coins:
+        distances = [manhattan_distance((x, y), c) for c in coins]
+        min_idx = np.argmin(distances)
+        return coins[min_idx], 'COIN'
+    # If no coins, target crates
+    if crates.size > 0:
+        crate_list = [tuple(c) for c in crates]
+        distances = [manhattan_distance((x, y), c) for c in crate_list]
+        min_idx = np.argmin(distances)
+        return crate_list[min_idx], 'CRATE'
+    # If no crates, target opponents
+    if opponents:
+        distances = [manhattan_distance((x, y), o) for o in opponents]
+        min_idx = np.argmin(distances)
+        return opponents[min_idx], 'OPPONENT'
+    return None, None
+
 
 def is_in_dead_end(game_state, position):
     x, y = position
     arena = game_state['field']
     walls = 0
-    for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]:
+    for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
         nx, ny = x + dx, y + dy
-        if arena[nx, ny] == -1 or arena[nx, ny] == 1:
+        if not (0 <= nx < arena.shape[0] and 0 <= ny < arena.shape[1]):
+            walls += 1  # Edge of map
+        elif arena[nx, ny] == -1 or arena[nx, ny] == 1:
             walls += 1
     return walls >= 3
+
 
 def is_adjacent_to_crate(game_state, position):
     x, y = position
     arena = game_state['field']
-    for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]:
+    for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
         nx, ny = x + dx, y + dy
         if 0 <= nx < arena.shape[0] and 0 <= ny < arena.shape[1]:
             if arena[nx, ny] == 1:
                 return True
     return False
 
+
 def is_adjacent_to_opponent(game_state, position):
     x, y = position
     opponents = [xy for (_, _, _, xy) in game_state['others']]
-    for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]:
+    for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
         if (x + dx, y + dy) in opponents:
             return True
     return False
+
+
+def is_in_blast_zone(game_state):
+    position = game_state['self'][3]
+    x, y = position
+    arena = game_state['field']
+
+    # Compute bomb map
+    bomb_map = np.ones(arena.shape) * 5
+
+    bombs = game_state['bombs']
+
+    for (bx, by), t in bombs:
+        # Mark the bomb position as dangerous at explosion time
+        bomb_map[bx, by] = min(bomb_map[bx, by], t)
+
+        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            for i in range(1, 4):
+                nx, ny = bx + dx * i, by + dy * i
+                if (0 <= nx < arena.shape[0]) and (0 <= ny < arena.shape[1]):
+                    if arena[nx, ny] != 0:
+                        break
+                    bomb_map[nx, ny] = min(bomb_map[nx, ny], t)
+                else:
+                    break
+
+    # Current position dangerous?
+    return bomb_map[x, y] <= 3
+
 
 def moved_away_from_bomb(old_game_state, new_game_state):
     x_old, y_old = old_game_state['self'][3]

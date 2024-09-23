@@ -91,7 +91,7 @@ def setup(self):
     print(f"Using device: {device_name}")  # Print statement to verify device
     self.logger.info(f"Model is using device: {device_name}")
 
-    input_size = 27  # Adjusted to match the new feature vector size
+    input_size = 19  # Adjusted to match the new feature vector size
 
     self.q_network = DQN(input_size, len(ACTIONS)).to(self.device)
     self.target_network = DQN(input_size, len(ACTIONS)).to(self.device)
@@ -127,7 +127,7 @@ def setup(self):
 
 def act(self, game_state: dict) -> str:
     """Choose an action based on Q-values."""
-    features = state_to_features(game_state)
+    features = state_to_features(self, game_state)
     if features is None:
         self.logger.debug("No features extracted, choosing a random action.")
         return np.random.choice(ACTIONS)
@@ -208,193 +208,128 @@ def get_escape_routes(arena, x, y, bomb_map, game_state):
                 safe_directions += 1
     return safe_directions
 
-def state_to_features(game_state: dict) -> np.ndarray:
+def state_to_features(self, game_state: dict) -> np.ndarray:
     """Convert the game state into a feature vector."""
     if game_state is None:
         return None
 
+    # Extract basic information
     arena = game_state['field']
-    (x, y) = game_state['self'][3]  # Agent's position
-    coins = game_state['coins']
+    x, y = game_state['self'][3]  # Agent's position
     bombs = game_state['bombs']
+    bombs_left = game_state['self'][2]
     others = [xy for (_, _, _, xy) in game_state['others']]
+    coins = game_state['coins']
+    step = game_state['step']
+    max_steps = 400  # Assuming maximum steps per game
 
-    # Initialize bomb map with a finite large value
-    bomb_map = np.ones(arena.shape) * 5  # Distance to the nearest bomb
+    # Initialize features list
+    features = []
 
-    # Update bomb map with bombs that will explode
-    for (bx, by), t in bombs:
-        for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]:
-            for i in range(1, 4):
-                nx, ny = bx + dx*i, by + dy*i
-                if 0 <= nx < arena.shape[0] and 0 <= ny < arena.shape[1]:
-                    if arena[nx, ny] != 0:  # Wall or crate
-                        break
-                    bomb_map[nx, ny] = min(bomb_map[nx, ny], t)
-                else:
-                    break
+    # Valid Moves
+    directions = {'UP': (x, y - 1),
+                  'DOWN': (x, y + 1),
+                  'LEFT': (x - 1, y),
+                  'RIGHT': (x + 1, y)}
+    for move in ['UP', 'DOWN', 'LEFT', 'RIGHT']:
+        nx, ny = directions[move]
+        if is_move_valid(nx, ny, game_state):
+            features.append(1)
+        else:
+            features.append(0)
 
-    # Update bomb map with current explosions
-    explosion_map = game_state['explosion_map']
-    bomb_map[explosion_map > 0] = 0
+    # Feature 5: Bomb Availability
+    features.append(int(bombs_left > 0))
 
-    # Tiles with current explosions (blasts last for 2 steps: t = 0 and t = -1)
-    explosion_indices = np.argwhere(explosion_map > 0)
-    for ex, ey in explosion_indices:
-        # Set bomb_map to 0 for tiles currently exploding
-        bomb_map[ex, ey] = 0
-
-    # Feature 1-4: Valid moves (UP, DOWN, LEFT, RIGHT)
-    valid_up = is_move_valid(x, y - 1, game_state)
-    valid_down = is_move_valid(x, y + 1, game_state)
-    valid_left = is_move_valid(x - 1, y, game_state)
-    valid_right = is_move_valid(x + 1, y, game_state)
-
-    # Feature 5: Bomb availability (binary feature)
-    bomb_available = int(game_state['self'][2])  # 1 if the agent can place a bomb, 0 otherwise
-
-    # Feature 6-7: Nearest coin delta x and delta y (normalized)
+    # Feature 6-7: Proximity to Nearest Coin
     if coins:
         distances = [(cx - x, cy - y) for (cx, cy) in coins]
         nearest_coin_dx, nearest_coin_dy = min(distances, key=lambda d: abs(d[0]) + abs(d[1]))
         max_distance = arena.shape[0] + arena.shape[1]
-        nearest_coin_dx /= max_distance
-        nearest_coin_dy /= max_distance
+        features.append(nearest_coin_dx / max_distance)
+        features.append(nearest_coin_dy / max_distance)
     else:
-        nearest_coin_dx = 0  # No coins left
-        nearest_coin_dy = 0  # No coins left
+        features.extend([0, 0])  # No coins left
 
-    # Feature 8: Number of coins remaining (normalized)
-    num_coins_remaining = len(coins) / ((arena.shape[0] - 2) * (arena.shape[1] - 2))
-
-    # Feature 9: Proximity to nearest opponent (normalized)
-    if others:
-        opponent_distances = [abs(x - ox) + abs(y - oy) for (ox, oy) in others]
-        nearest_opponent_dist = min(opponent_distances) / (arena.shape[0] + arena.shape[1])
-    else:
-        nearest_opponent_dist = -1  # No opponents
-
-    # Feature 10: Proximity to bombs (normalized)
-    if bombs:
-        bomb_dists = [abs(x - bx) + abs(y - by) for (bx, by), _ in bombs]
-        nearest_bomb_dist = min(bomb_dists) / (arena.shape[0] + arena.shape[1])
-    else:
-        nearest_bomb_dist = -1  # No bombs
-
-    # Feature 11: In a dead end (binary feature)
-    walls = [arena[x + dx, y + dy] == -1 for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1)]]
-    dead_end = int(sum(walls) >= 3)
-
-    # Feature 12: Number of adjacent crates (normalized)
-    adjacent_crates = sum(
-        [arena[x + dx, y + dy] == 1 for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1)]]
-    ) / 4  # Normalize by maximum possible adjacent crates
-
-    # Feature 13: Normalized step count (current step / max steps)
-    normalized_step = game_state['step'] / 400
-
-    # Feature 14: Number of crates left (normalized)
-    num_crates_left = np.sum(arena == 1) / ((arena.shape[0] - 2) * (arena.shape[1] - 2))  # Exclude walls
-
-    # Feature 15: Is agent adjacent to a bomb about to explode (binary)
-    adjacent_positions = [(x + dx, y + dy) for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]]
-    adjacent_bomb = int(any(bomb_map[pos] <= 3 for pos in adjacent_positions if 0 <= pos[0] < arena.shape[0] and 0 <= pos[1] < arena.shape[1]))
-
-    # Feature 16: Is agent adjacent to an opponent (binary)
-    adjacent_opponent = int(any(pos in others for pos in adjacent_positions))
-
-    # Feature 17-18: Nearest crate delta x and delta y (normalized)
+    # Feature 8-9: Proximity to Nearest Crate
     crates = np.argwhere(arena == 1)
     if crates.size > 0:
         distances = [(cx - x, cy - y) for (cx, cy) in crates]
         nearest_crate_dx, nearest_crate_dy = min(distances, key=lambda d: abs(d[0]) + abs(d[1]))
         max_distance = arena.shape[0] + arena.shape[1]
-        nearest_crate_dx /= max_distance
-        nearest_crate_dy /= max_distance
+        features.append(nearest_crate_dx / max_distance)
+        features.append(nearest_crate_dy / max_distance)
     else:
-        nearest_crate_dx = 0  # No crates left
-        nearest_crate_dy = 0  # No crates left
+        features.extend([0, 0])  # No crates left
 
-    # Feature 19: Number of crates that would be destroyed by placing a bomb at current position (normalized)
-    potential_crates_destroyed = count_crates_destroyed(arena, x, y) / 4.0  # Normalize by max possible (4 crates)
+    # Feature 10-11: Proximity to Nearest Opponent
+    if others:
+        distances = [(ox - x, oy - y) for (ox, oy) in others]
+        nearest_opponent_dx, nearest_opponent_dy = min(distances, key=lambda d: abs(d[0]) + abs(d[1]))
+        max_distance = arena.shape[0] + arena.shape[1]
+        features.append(nearest_opponent_dx / max_distance)
+        features.append(nearest_opponent_dy / max_distance)
+    else:
+        features.extend([0, 0])  # No opponents
 
-    # Feature 20: Escape routes after bomb placement (normalized)
-    escape_routes = get_escape_routes(arena, x, y, bomb_map, game_state) / 4.0  # Normalize by max possible (4 directions)
+    # Feature 12: Adjacent to Crate
+    adjacent_crate = int(any(
+        arena[x + dx, y + dy] == 1
+        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]
+        if 0 <= x + dx < arena.shape[0] and 0 <= y + dy < arena.shape[1]
+    ))
+    features.append(adjacent_crate)
 
-    # Feature 21: Is bomb placement safe (binary)
-    is_bomb_placement_safe = int(escape_routes > 0)
+    # Feature 13: Adjacent to Opponent
+    adjacent_opponent = int(any(
+        (x + dx, y + dy) in others
+        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]
+    ))
+    features.append(adjacent_opponent)
 
-    # Feature 22: Distance to nearest safe tile (normalized)
-    from collections import deque
-    visited = set()
-    queue = deque()
-    queue.append((x, y, 0))
-    nearest_safe_distance = arena.shape[0] + arena.shape[1]  # Max possible distance
-    while queue:
-        cx, cy, dist = queue.popleft()
-        if bomb_map[cx, cy] > 0:
-            nearest_safe_distance = dist
-            break
-        for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]:
-            nx, ny = cx + dx, cy + dy
-            if (0 <= nx < arena.shape[0]) and (0 <= ny < arena.shape[1]):
-                if (nx, ny) not in visited and arena[nx, ny] == 0 and bomb_map[nx, ny] > 0:
-                    visited.add((nx, ny))
-                    queue.append((nx, ny, dist + 1))
-    distance_to_nearest_safe_tile = nearest_safe_distance / (arena.shape[0] + arena.shape[1])  # Normalize
+    # Feature 14: In Dead End
+    walls = sum([
+        arena[x + dx, y + dy] == -1 or arena[x + dx, y + dy] == 1 or
+        not (0 <= x + dx < arena.shape[0] and 0 <= y + dy < arena.shape[1])
+        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]
+    ])
+    in_dead_end = int(walls >= 3)
+    features.append(in_dead_end)
 
-    # Feature 23: Bomb threat level at current position (normalized)
-    # Ensure bomb_map[x, y] is within [0, 4] to avoid negative or infinite values
-    bomb_timer = min(bomb_map[x, y], 4.0)
-    bomb_threat_level = max(0.0, (4.0 - bomb_timer) / 4.0)  # Normalize between 0 and 1
+    # Bomb Map
+    bomb_map = np.ones(arena.shape) * 5
+    for (bx, by), t in bombs:
+        for dx in range(-3, 4):
+            for dy in range(-3, 4):
+                nx, ny = bx + dx, by + dy
+                if (0 <= nx < arena.shape[0]) and (0 <= ny < arena.shape[1]):
+                    dist = abs(bx - nx) + abs(by - ny)
+                    if dist < 4 and arena[nx, ny] == 0:
+                        bomb_map[nx, ny] = min(bomb_map[nx, ny], t)
 
+    # Feature 15: In Bomb Blast Zone
+    in_bomb_blast_zone = int(bomb_map[x, y] < 4)
+    # Feature 16: Bomb Timer (normalized)
+    bomb_timer = 0 if np.min(bomb_map) == 5 else (4 - np.min(bomb_map)) / 4  # Normalize between 0 and 1
+    features.append(in_bomb_blast_zone)
+    features.append(bomb_timer)
 
-    # Feature 24: Is agent in bomb blast zone (binary)
-    is_in_bomb_blast_zone = int(bomb_map[x, y] <= 3)
+    # Feature 17: Escape Routes
+    escape_routes = sum([
+        1 for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]
+        if is_move_valid(x + dx, y + dy, game_state)
+    ]) / 4  # Normalize between 0 and 1
+    features.append(escape_routes)
 
-    # New Feature 25: Distance to nearest wall in x-direction (normalized)
-    left_distance = 0
-    for dx in range(1, x + 1):
-        if arena[x - dx, y] == -1:
-            break
-        left_distance += 1
-    right_distance = 0
-    for dx in range(1, arena.shape[0] - x):
-        if arena[x + dx, y] == -1:
-            break
-        right_distance += 1
-    nearest_wall_x = min(left_distance, right_distance) / (arena.shape[0] - 2)  # Normalize
+    # Feature 18: Loop Detection
+    potential_loop = int(self.coordinate_history.count((x, y)) > 2)
+    features.append(potential_loop)
 
-    # New Feature 26: Distance to nearest wall in y-direction (normalized)
-    up_distance = 0
-    for dy in range(1, y + 1):
-        if arena[x, y - dy] == -1:
-            break
-        up_distance += 1
-    down_distance = 0
-    for dy in range(1, arena.shape[1] - y):
-        if arena[x, y + dy] == -1:
-            break
-        down_distance += 1
-    nearest_wall_y = min(up_distance, down_distance) / (arena.shape[1] - 2)  # Normalize
-
-    # New Feature 27: Number of opponents remaining (normalized)
-    max_possible_opponents = 3  # Assuming maximum of 3 opponents in the game
-    num_opponents_remaining = len(others) / max_possible_opponents  # Normalize
+    # Feature 19: Normalized Step
+    normalized_step = step / max_steps
+    features.append(normalized_step)
 
     # Combine all features into a single feature vector
-    features = [
-        valid_up, valid_down, valid_left, valid_right,
-        bomb_available, nearest_coin_dx, nearest_coin_dy,
-        num_coins_remaining, nearest_opponent_dist, nearest_bomb_dist,
-        dead_end, adjacent_crates, normalized_step,
-        num_crates_left, adjacent_bomb, adjacent_opponent,
-        nearest_crate_dx, nearest_crate_dy, potential_crates_destroyed,
-        escape_routes, is_bomb_placement_safe,
-        distance_to_nearest_safe_tile, bomb_threat_level, is_in_bomb_blast_zone,
-        nearest_wall_x, nearest_wall_y, num_opponents_remaining  # New features added here
-    ]
-
     return np.array(features, dtype=np.float32)
 
 def create_graphs(self):
