@@ -433,31 +433,47 @@ def is_adjacent_to_opponent(game_state, position):
 
 
 def is_in_blast_zone(game_state):
+    """Determine if the agent is in a dangerous explosion zone."""
     position = game_state['self'][3]
     x, y = position
     arena = game_state['field']
 
-    # Compute bomb map
+    # Initialize bomb map with default safe value
     bomb_map = np.ones(arena.shape) * 5
 
     bombs = game_state['bombs']
+    explosions = game_state['explosion_map']  # Explosion map from game_state
 
+    # Include active bombs
     for (bx, by), t in bombs:
         # Mark the bomb position as dangerous at explosion time
         bomb_map[bx, by] = min(bomb_map[bx, by], t)
 
+        # Spread the danger along the four cardinal directions
         for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-            for i in range(1, 4):
+            for i in range(1, 4):  # Explosion extends up to 3 tiles
                 nx, ny = bx + dx * i, by + dy * i
                 if (0 <= nx < arena.shape[0]) and (0 <= ny < arena.shape[1]):
-                    if arena[nx, ny] != 0:
+                    if arena[nx, ny] == -1:  # Stone wall blocks explosion
                         break
                     bomb_map[nx, ny] = min(bomb_map[nx, ny], t)
+                    if arena[nx, ny] == 1:  # Crate gets destroyed; explosion stops
+                        break
                 else:
                     break
 
-    # Current position dangerous?
-    return bomb_map[x, y] <= 3
+    # Include active explosions that are dangerous
+    # Explosions in the explosion_map are typically represented with values > 0
+    # The value may decrease each step (e.g., from 2 down to 1, then 0)
+    # You may need to adjust this based on how the explosion_map is defined in your framework
+    for ix in range(arena.shape[0]):
+        for iy in range(arena.shape[1]):
+            if explosions[ix, iy] > 0:
+                # Mark as dangerous for the first step after explosion
+                bomb_map[ix, iy] = min(bomb_map[ix, iy], 0)  # Explosion just happened (t=0)
+
+    # Check if current position is dangerous (t <= 0)
+    return bomb_map[x, y] <= 0
 
 
 def moved_away_from_bomb(old_game_state, new_game_state):

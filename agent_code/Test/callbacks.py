@@ -243,8 +243,10 @@ def state_to_features(self, game_state: dict) -> np.ndarray:
 
     # Feature 6-7: Proximity to Nearest Coin
     if coins:
-        distances = [(cx - x, cy - y) for (cx, cy) in coins]
-        nearest_coin_dx, nearest_coin_dy = min(distances, key=lambda d: abs(d[0]) + abs(d[1]))
+        distances = [manhattan_distance((x, y), c) for c in coins]
+        min_idx = np.argmin(distances)
+        nearest_coin_dx = coins[min_idx][0] - x
+        nearest_coin_dy = coins[min_idx][1] - y
         max_distance = arena.shape[0] + arena.shape[1]
         features.append(nearest_coin_dx / max_distance)
         features.append(nearest_coin_dy / max_distance)
@@ -254,8 +256,10 @@ def state_to_features(self, game_state: dict) -> np.ndarray:
     # Feature 8-9: Proximity to Nearest Crate
     crates = np.argwhere(arena == 1)
     if crates.size > 0:
-        distances = [(cx - x, cy - y) for (cx, cy) in crates]
-        nearest_crate_dx, nearest_crate_dy = min(distances, key=lambda d: abs(d[0]) + abs(d[1]))
+        distances = [manhattan_distance((x, y), (cx, cy)) for (cx, cy) in crates]
+        min_idx = np.argmin(distances)
+        nearest_crate_dx = crates[min_idx][0] - x
+        nearest_crate_dy = crates[min_idx][1] - y
         max_distance = arena.shape[0] + arena.shape[1]
         features.append(nearest_crate_dx / max_distance)
         features.append(nearest_crate_dy / max_distance)
@@ -264,8 +268,10 @@ def state_to_features(self, game_state: dict) -> np.ndarray:
 
     # Feature 10-11: Proximity to Nearest Opponent
     if others:
-        distances = [(ox - x, oy - y) for (ox, oy) in others]
-        nearest_opponent_dx, nearest_opponent_dy = min(distances, key=lambda d: abs(d[0]) + abs(d[1]))
+        distances = [manhattan_distance((x, y), o) for o in others]
+        min_idx = np.argmin(distances)
+        nearest_opponent_dx = others[min_idx][0] - x
+        nearest_opponent_dy = others[min_idx][1] - y
         max_distance = arena.shape[0] + arena.shape[1]
         features.append(nearest_opponent_dx / max_distance)
         features.append(nearest_opponent_dy / max_distance)
@@ -289,36 +295,67 @@ def state_to_features(self, game_state: dict) -> np.ndarray:
 
     # Feature 14: In Dead End
     walls = sum([
-        arena[x + dx, y + dy] == -1 or arena[x + dx, y + dy] == 1 or
-        not (0 <= x + dx < arena.shape[0] and 0 <= y + dy < arena.shape[1])
-        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]
+        1 for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]
+        if not (0 <= x + dx < arena.shape[0] and 0 <= y + dy < arena.shape[1]) or
+           arena[x + dx, y + dy] == -1 or arena[x + dx, y + dy] == 1
     ])
     in_dead_end = int(walls >= 3)
     features.append(in_dead_end)
 
-    # Bomb Map
+    # Corrected Bomb Map generation with explosion remaining dangerous for one more round
     bomb_map = np.ones(arena.shape) * 5
+
+    # Include bombs and their future explosions
     for (bx, by), t in bombs:
-        for dx in range(-3, 4):
-            for dy in range(-3, 4):
-                nx, ny = bx + dx, by + dy
-                if (0 <= nx < arena.shape[0]) and (0 <= ny < arena.shape[1]):
-                    dist = abs(bx - nx) + abs(by - ny)
-                    if dist < 4 and arena[nx, ny] == 0:
-                        bomb_map[nx, ny] = min(bomb_map[nx, ny], t)
+        # The bomb position itself will be dangerous at t (when bomb explodes)
+        explosion_time = t
+        if 0 <= bx < arena.shape[0] and 0 <= by < arena.shape[1]:
+            bomb_map[bx, by] = min(bomb_map[bx, by], explosion_time)
+
+        # Spread the danger along the four cardinal directions
+        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            for i in range(1, 4):  # Explosion extends up to 3 tiles
+                nx, ny = bx + dx * i, by + dy * i
+                if 0 <= nx < arena.shape[0] and 0 <= ny < arena.shape[1]:
+                    cell = arena[nx, ny]
+                    if cell == -1:  # Stone wall blocks explosion
+                        break
+                    danger_time = t
+                    bomb_map[nx, ny] = min(bomb_map[nx, ny], danger_time)
+                    if cell == 1:  # Crate gets destroyed; explosion stops
+                        break
+                else:
+                    break
+
+    # Include currently active explosions from explosion_map
+    explosions = game_state['explosion_map']  # 2D array with explosion timers
+    for ix in range(arena.shape[0]):
+        for iy in range(arena.shape[1]):
+            if explosions[ix, iy] > 0:
+                # The explosion remains dangerous this turn
+                bomb_map[ix, iy] = -1  # Negative time indicates active explosion
+
+    # Include positions that will be dangerous due to lingering explosions
+    # After an explosion, the position remains dangerous for one more turn
+    # Suppose we have a data structure listing positions with lingering explosions (if available)
 
     # Feature 15: In Bomb Blast Zone
-    in_bomb_blast_zone = int(bomb_map[x, y] < 4)
+    in_bomb_blast_zone = int(bomb_map[x, y] <= 0)
     # Feature 16: Bomb Timer (normalized)
-    bomb_timer = 0 if np.min(bomb_map) == 5 else (4 - np.min(bomb_map)) / 4  # Normalize between 0 and 1
+    if bomb_map[x, y] <= 0:
+        bomb_timer = (4 - abs(bomb_map[x, y])) / 4  # Normalize between 0 and 1
+    elif bomb_map[x, y] < 5:
+        bomb_timer = (bomb_map[x, y]) / 4  # Normalize between 0 and 1
+    else:
+        bomb_timer = 0
     features.append(in_bomb_blast_zone)
     features.append(bomb_timer)
 
-    # Feature 17: Escape Routes
+    # Feature 17: Escape Routes (normalized)
     escape_routes = sum([
-        1 for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]
-        if is_move_valid(x + dx, y + dy, game_state)
-    ]) / 4  # Normalize between 0 and 1
+        is_move_valid(x + dx, y + dy, game_state)
+        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]
+    ]) / 4.0
     features.append(escape_routes)
 
     # Feature 18: Loop Detection
